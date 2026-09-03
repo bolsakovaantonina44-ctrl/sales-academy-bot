@@ -46,3 +46,5 @@ def handle_message(message):
         bot.send_message(message.chat.id, f"Ошибка: {e}")
 
 bot.infinity_polling()
+
+
