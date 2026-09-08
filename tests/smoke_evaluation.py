@@ -10,6 +10,15 @@ from academy.domain import session_empty, render_report
 from academy.scenarios import template
 
 
+class DiagnosticAI(AI):
+    def request(self, name, instructions, payload, schema, *args, **kwargs):
+        result = super().request(name, instructions, payload, schema, *args, **kwargs)
+        if name == 'evaluation_review':
+            # This script contains synthetic fixtures only, never production conversations.
+            print('SMOKE_REVIEW ' + json.dumps({'review': result, 'report': payload['report']}, ensure_ascii=False), flush=True)
+        return result
+
+
 def main():
     s = session_empty(); t = template('2')
     s['id'] = 0
@@ -27,7 +36,7 @@ def main():
     s['history'] = [dict(role=role, content=text) for role, text in dialogue]
     model = os.getenv('OPENAI_MODEL', 'gpt-5.6-luna')
     with OpenAI(api_key=os.environ['OPENAI_API_KEY'], timeout=90, max_retries=1) as client:
-        data = AI(client, model, 'unused', os.getenv('OPENAI_EVAL_MODEL', model)).evaluate(s)
+        data = DiagnosticAI(client, model, 'unused', os.getenv('OPENAI_EVAL_MODEL', model)).evaluate(s)
     if data['next_step_status'] != 'proposed':
         raise RuntimeError('Smoke: tentative followup was not recognized')
     if 'ПЛАН ДЛЯ РУКОВОДИТЕЛЯ' not in render_report(data, s):
