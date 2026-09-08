@@ -103,7 +103,7 @@ def main():
     store.recover()
     LOG.info('Startup: database ready')
     try:
-        identity = bot.get_me(timeout=15)
+        identity = bot.get_me()
         webhook = bot.get_webhook_info(timeout=15)
     except Exception as exc:
         LOG.error('Startup: Telegram connection failed kind=%s', type(exc).__name__)
