@@ -77,6 +77,9 @@ class EvaluationTests(unittest.TestCase):
                                       evaluation(s), dict(passed=True, issues=[])])
         self.assertEqual(ai.evaluate(s)['strengths'][0]['text'], 'Вопрос')
         self.assertEqual(ai.request.call_count, 4)
+        repaired_payload = ai.request.call_args_list[2].args[2]
+        self.assertEqual(repaired_payload['rejected_report']['strengths'][0]['text'], d['strengths'][0]['text'])
+        self.assertEqual(repaired_payload['review_feedback'], ['strengths: действие клиента'])
 
     def test_invalid_report_never_published_after_retry_limit(self):
         s = self.talk(); ai = AI(None, 'fake', 'fake')
