@@ -218,6 +218,9 @@ prior_observations — проверенные замечания прошлых 
                 check_evaluation(data, session)
                 review = self.request('evaluation_review', '''Проверь только фактическую корректность отчёта.
 manager — продавец-человек; client — покупатель, которого играл бот. Не продолжай разговор.
+fields — открытые исходные условия тренировки: заданные роль клиента, продукт и цель менеджера.
+Роль из fields.customer известна до диалога: упоминание собственника/закупщика не требует повторного представления в history.
+Это не доказывает, что менеджер сам выяснил полномочия. Скрытые потребности не следуют из роли.
 Проверь, не приписаны ли в reason, strengths, mistakes или recommendations слова/действия client менеджеру,
 даже если к выводу приложена другая корректная цитата manager.
 Проверь, не написано ли «не предложил следующий контакт», когда manager его предложил,
@@ -230,7 +233,7 @@ manager — продавец-человек; client — покупатель, к
 Не пересчитывай баллы и не отклоняй отчёт из-за стилистических предпочтений или другой возможной стратегии.
 passed=false только при конкретной ошибке; в issues кратко укажи поле и message_id для исправления.
 Если таких ошибок нет, passed=true, issues=[].''',
-                    {'history': payload['history'], 'report': data}, REVIEW_SCHEMA,
+                    {'fields': payload['fields'], 'history': payload['history'], 'report': data}, REVIEW_SCHEMA,
                     self.eval_model, max_output_tokens=2000)
                 if not review['passed'] or review['issues']:
                     payload['review_feedback'] = review['issues']

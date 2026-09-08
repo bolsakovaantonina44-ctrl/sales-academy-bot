@@ -64,6 +64,8 @@ class EvaluationTests(unittest.TestCase):
         ai = AI(None, 'fake', 'fake'); ai.request = Mock(side_effect=[bad, good, dict(passed=True, issues=[])])
         self.assertEqual(ai.evaluate(s), good)
         self.assertEqual(ai.request.call_count, 3)
+        self.assertEqual(ai.request.call_args_list[2].args[2]['fields'], s['fields'])
+        self.assertNotIn('card', ai.request.call_args_list[2].args[2])
         payload = ai.request.call_args_list[1].args[2]
         self.assertEqual([m['speaker'] for m in payload['history']], ['client', 'manager', 'client'])
         self.assertNotIn('role', payload['history'][0])
