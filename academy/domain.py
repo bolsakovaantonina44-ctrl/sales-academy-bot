@@ -80,6 +80,40 @@ EVAL_SCHEMA = obj(
 )
 
 
+def evidence_reference_schema(schema):
+    """The model selects source references; the engine copies actual quotations."""
+    schema = copy.deepcopy(schema)
+    if schema.get('type') == 'object':
+        props = schema['properties']
+        if set(props) == {'message_id', 'speaker', 'quote'}:
+            del props['quote']
+            schema['required'].remove('quote')
+        for key, value in props.items():
+            props[key] = evidence_reference_schema(value)
+    elif schema.get('type') == 'array':
+        schema['items'] = evidence_reference_schema(schema['items'])
+    return schema
+
+
+EVAL_MODEL_SCHEMA = evidence_reference_schema(EVAL_SCHEMA)
+
+
+def attach_evidence(data, history):
+    data = copy.deepcopy(data)
+    for field in ('skills', 'strengths', 'mistakes', 'recommendations'):
+        for item in data[field]:
+            for ref in item['evidence']:
+                ident = ref['message_id']
+                if type(ident) is not int or not 1 <= ident <= len(history):
+                    raise EvaluationError('Unknown evidence message')
+                message = history[ident - 1]
+                speaker = 'manager' if message['role'] == 'user' else 'client'
+                if ref['speaker'] != speaker:
+                    raise EvaluationError('Evidence speaker mismatch')
+                ref['quote'] = message['content']
+    return data
+
+
 def validate(value, schema, path='result'):
     t = schema['type']
     types = t if isinstance(t, list) else [t]

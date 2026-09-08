@@ -2,7 +2,7 @@ import copy
 import unittest
 from unittest.mock import Mock
 from academy.ai import AI
-from academy.domain import EvaluationError, RUBRIC_VERSION, check_evaluation, render_report
+from academy.domain import attach_evidence, EVAL_MODEL_SCHEMA, EvaluationError, RUBRIC_VERSION, check_evaluation, render_report
 import test_core as core
 evaluation = core.evaluation
 
@@ -14,6 +14,17 @@ class EvaluationTests(unittest.TestCase):
     send = core.CoreTests.send
     start = core.CoreTests.start
     talk = core.CoreTests.talk
+    def test_quotes_are_copied_from_history_without_model_rephrasing(self):
+        s=self.talk();d=evaluation(s)
+        for field in ('skills','strengths','mistakes','recommendations'):
+            for item in d[field]:
+                for ref in item['evidence']:ref.pop('quote',None)
+        result=attach_evidence(d,s['history'])
+        check_evaluation(result,s)
+        self.assertEqual(result['skills'][0]['evidence'][0]['quote'],s['history'][1]['content'])
+        props=EVAL_MODEL_SCHEMA['properties']['skills']['items']['properties']['evidence']['items']['properties']
+        self.assertNotIn('quote',props)
+
     def test_client_quote_cannot_be_presented_as_manager_quote(self):
         s = self.talk(); d = evaluation(s)
         d['strengths'][0]['evidence'] = [dict(message_id=1, speaker='manager', quote=s['history'][0]['content'])]

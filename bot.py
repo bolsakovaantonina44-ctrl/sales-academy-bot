@@ -105,7 +105,11 @@ def main():
     LOG.info('Startup: opening persistent database at %s', path)
     store = Store(path)
     store.recover()
-    LOG.info('Startup: database ready')
+    with store.db() as db:
+        persisted = db.execute('SELECT COUNT(*), COALESCE(SUM(counted),0) FROM sessions').fetchone()
+        pending = db.execute("SELECT COUNT(*) FROM inbox WHERE status IN ('queued','working','waiting')").fetchone()[0]
+    LOG.info('Startup: database ready sessions=%s counted_trainings=%s pending_events=%s',
+             persisted[0], persisted[1], pending)
     try:
         identity = bot.get_me()
         webhook = bot.get_webhook_info(timeout=15)

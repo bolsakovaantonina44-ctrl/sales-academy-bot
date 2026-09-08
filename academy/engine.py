@@ -131,6 +131,8 @@ class Engine:
                 self.make_report(s, event)
                 s['phase'] = 'completed'
                 replies = [s['report'], 'Разбор сохранён. Доступны «Показать скрытый сценарий» и «Новая тренировка».']
+                if user not in self.admin_ids and self.store.attempts(user) >= self.limit:
+                    replies.append(f'Вы завершили доступные {self.limit} тренировки.\n\n' + s['knowledge']['offer'])
         elif s['phase'] == 'completed':
             replies = ['Эта тренировка завершена. Нажми «Новая тренировка» или «Посмотреть разбор».']
         elif s['phase'] == 'closed':
