@@ -42,7 +42,7 @@ class AI:
                             {'fields': session['fields'], 'setup': session['setup'], 'text': text}, FIELDS_SCHEMA)
 
     def card(self, fields):
-        return validate_card(self.request('client_card', '''Создай ОДНОГО вымышленного клиента по четырём полям.
+        card = self.request('client_card', '''Создай ОДНОГО вымышленного клиента по четырём полям.
 Карточка описывает внутренние обстоятельства клиента, а не свойства товара продавца.
 3–6 фактов с уникальными ID и условиями раскрытия; 1–3 реальных барьера с ID и условиями снятия.
 Начальная реплика opening короткая и нейтральная, без скрытых фактов. Никаких рекомендаций менеджеру.
@@ -54,7 +54,13 @@ background: обстоятельства, потребность, приорит
 Если сроки, бюджет или поставщик не заданы, соответствующее поле пустое и включено в unknown. Не придумывай числа.
 Значимые скрытые сведения background должны быть представлены также в facts с условиями раскрытия.
 refusal_condition: реалистичное условие прекращения разговора клиентом.
-Для hard допустим квалифицированный отказ или выход на другого ЛПР. Укажи реалистичный успех.''', fields, CARD_SCHEMA))
+Для hard допустим квалифицированный отказ или выход на другого ЛПР. Укажи реалистичный успех.''', fields, CARD_SCHEMA)
+        # Internal keys belong to the engine, not to the language model.
+        # No cross-references exist until the first plan is generated.
+        for field, prefix in (('facts', 'f'), ('barriers', 'b')):
+            for index, item in enumerate(card[field], 1):
+                item['id'] = f'{prefix}{index}'
+        return validate_card(card)
 
     def plan(self, session, text, feedback=''):
         return self.request('turn_plan', '''Ты внутренний контроллер симуляции. Не отвечай менеджеру.

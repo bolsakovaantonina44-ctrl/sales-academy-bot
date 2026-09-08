@@ -72,6 +72,18 @@ class MVPTests(unittest.TestCase):
         self.assertEqual(s['knowledge']['product_knowledge'],{})
         self.assertIn('Керамогранит',menu())  # Explicit demo label, never a hidden choice.
 
+    def test_generated_card_ids_are_owned_by_engine(self):
+        card=copy.deepcopy(template('1')['card'])
+        for field in ('facts','barriers'):
+            for item in card[field]:item['id']='Факт с пробелами / duplicate'
+        ai=AI(None,'fake','fake');ai.request=Mock(return_value=card)
+        result=ai.card({})
+        self.assertEqual([x['id'] for x in result['facts']],
+                         [f'f{i}' for i in range(1,len(result['facts'])+1)])
+        self.assertEqual([x['id'] for x in result['barriers']],
+                         [f'b{i}' for i in range(1,len(result['barriers'])+1)])
+        validate_card(result)
+
     def test_semantic_name_intent_returns_frozen_name(self):
         s=self.talk();ai=AI(None,'fake','fake'); ai.request=Mock(side_effect=AssertionError('No writer needed'))
         state=initial_state();state['last_intent']='name'
