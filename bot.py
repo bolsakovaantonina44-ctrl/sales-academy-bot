@@ -70,6 +70,10 @@ def worker(store, engine, ai, bot, stop, send):
 
 
 def main():
+    import faulthandler
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s', force=True)
+    LOG.info('Startup: entering application')
+    faulthandler.dump_traceback_later(60, repeat=False)
     import fcntl
     import telebot
     from openai import OpenAI
@@ -94,8 +98,18 @@ def main():
     model = os.getenv('OPENAI_MODEL', 'gpt-5.6-luna')  # Original default, availability must be verified.
     ai = AI(client, model, os.getenv('OPENAI_TRANSCRIBE_MODEL', 'gpt-4o-mini-transcribe'),
             os.getenv('OPENAI_EVAL_MODEL', model))
+    LOG.info('Startup: opening persistent database at %s', path)
     store = Store(path)
     store.recover()
+    LOG.info('Startup: database ready')
+    try:
+        identity = bot.get_me(timeout=15)
+        webhook = bot.get_webhook_info(timeout=15)
+    except Exception as exc:
+        LOG.error('Startup: Telegram connection failed kind=%s', type(exc).__name__)
+        raise RuntimeError('Telegram startup check failed; verify token and network') from None
+    LOG.info('Startup: Telegram bot=@%s webhook_active=%s pending_updates=%s',
+             identity.username, bool(webhook.url), webhook.pending_update_count)
     admins = [int(v.strip()) for v in os.getenv('ADMIN_IDS', '').split(',') if v.strip()]
     engine = Engine(store, ai, limit=int(os.getenv('FREE_TRAININGS', '3')), admin_ids=admins)
     markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -123,6 +137,7 @@ def main():
     thread = threading.Thread(target=worker, args=(store, engine, ai, bot, stop, send), daemon=True)
     thread.start()
     LOG.info('Sales Academy demo-4.0 started; persistent path=%s', path)
+    faulthandler.cancel_dump_traceback_later()
     try:
         bot.infinity_polling(timeout=20, long_polling_timeout=20, skip_pending=False, allowed_updates=['message'])
     finally:
