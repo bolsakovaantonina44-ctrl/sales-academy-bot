@@ -10,11 +10,13 @@ from academy.ai import AI
 from academy.engine import Engine, deliver
 from academy.store import Store
 from academy.domain import normalize_command
+from academy.diagnostics import log_failure
 
 LOG = logging.getLogger('academy')
 BUTTONS = [['1', '2', '3'], ['Начать тренировку', 'Завершить тренировку'],
            ['Лёгкий', 'Средний', 'Сложный'], ['Повторить обработку', 'Посмотреть разбор'],
-           ['Показать скрытый сценарий', 'Мои тренировки'], ['Новая тренировка']]
+           ['Показать скрытый сценарий', 'Мои тренировки'], ['Обновить разбор', 'Новая тренировка'],
+           ['Пропустить эту реплику']]
 
 
 def worker(store, engine, ai, bot, stop, send):
@@ -39,12 +41,13 @@ def worker(store, engine, ai, bot, stop, send):
         try:
             if event['kind'] == 'text' and normalize_command(event['text']) in ('/retry', 'повторить обработку'):
                 failed = store.failed(event['user_id'])
-                if failed:
+                if failed and failed['attempts'] < 2:
                     event = store.retry_event(event, failed)
             try:
                 bot.send_chat_action(event['chat_id'], 'typing')
             except Exception:
                 pass  # Cosmetic action must never abort a persisted turn.
+            stage = 'transcription' if event['kind'] == 'voice' else 'conversation'
             if event['kind'] == 'voice':
                 info = bot.get_file(event['text'])
                 raw = bot.download_file(info.file_path)
@@ -58,10 +61,11 @@ def worker(store, engine, ai, bot, stop, send):
                     raise ValueError('Transcription empty or too long')
                 store.cache_text(event['id'], text)
                 event.update(kind='text', text=text)
+                stage = 'conversation'
             engine.handle(event)
         except Exception as exc:
             # Do not log API exception bodies, tokens, card contents or entire user messages.
-            LOG.error('processing error event=%s kind=%s', event['id'], type(exc).__name__)
+            log_failure(event, store.current(event['user_id']), locals().get('stage', 'transport'), exc)
             store.fail(event, type(exc).__name__)
         try:
             deliver(store, event['user_id'], send)
@@ -136,7 +140,7 @@ def main():
     stop = threading.Event()
     thread = threading.Thread(target=worker, args=(store, engine, ai, bot, stop, send), daemon=True)
     thread.start()
-    LOG.info('Sales Academy demo-4.0 started; persistent path=%s', path)
+    LOG.info('Sales Academy demo-4.1 started; persistent path=%s', path)
     faulthandler.cancel_dump_traceback_later()
     try:
         bot.infinity_polling(timeout=20, long_polling_timeout=20, skip_pending=False, allowed_updates=['message'])

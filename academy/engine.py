@@ -2,18 +2,41 @@
 import copy
 import json
 from .domain import (session_empty, initial_state, normalize_command, is_finish_command,
-                     render_report, VERSION)
+                     render_report, partial_report, VERSION, RUBRIC_VERSION)
+from .diagnostics import log_failure
 from .scenarios import TEMPLATES, template, menu
 
 QUESTIONS = {'product': 'Что ты продаёшь?', 'customer': 'Кому продаёшь: роль клиента и тип компании?',
              'goal': 'Какого результата хочешь достичь в этом разговоре?'}
 LEVELS = {'лёгкий': 'easy', 'легкий': 'easy', 'средний': 'medium', 'сложный': 'hard'}
+SKIP = ('/skip', 'пропустить эту реплику')
 
 
 class Engine:
     def __init__(self, store, ai, limit=3, admin_ids=(), max_turns=40):
         self.store, self.ai, self.limit = store, ai, limit
         self.admin_ids, self.max_turns = set(admin_ids), max_turns
+
+    def make_report(self, s, event):
+        s['versions'].update(app=VERSION, rubric=RUBRIC_VERSION, evaluator=self.ai.eval_model)
+        try:
+            s['prior_observations'] = [dict(session_id=p['id'], mistakes=p['report_data'].get('mistakes', []))
+                                      for p in self.store.recent(event['user_id'])
+                                      if p['id'] != s['id'] and p.get('report_status') == 'verified'
+                                      and p.get('report_data')][:3]
+            data = self.ai.evaluate(s)
+            s['report_data'], s['report'] = data, render_report(data, s)
+            s['report_status'] = 'verified'
+        except Exception as exc:
+            log_failure(event, s, 'evaluation', exc)
+            s['report_data'], s['report'] = None, partial_report(s)
+            s['report_status'] = 'technical_partial'
+
+    def omit_failed(self, s, event, failed):
+        if failed:
+            if not is_finish_command(failed['text']) and normalize_command(failed['text']) not in ('/recheck', 'обновить разбор'):
+                s['technical_errors'] = s.get('technical_errors', 0) + 1
+            event['discard_failed'] = True
 
     def setup_summary(self, s):
         f = s['fields']
@@ -27,14 +50,20 @@ class Engine:
         cmd = normalize_command(text)
         s = self.store.current(user)
         replies, charge = [], False
+        failed = self.store.failed(user)
         if cmd in ('/retry', 'повторить обработку'):
             failed = self.store.failed(user)
-            if failed:
+            if failed and failed['attempts'] < 2:
                 restored = self.store.retry_event(event, failed)
                 return self.handle(restored)
-            replies = ['Необработанных реплик нет. Сохранённые ответы доставляются автоматически.']
-        elif self.store.failed(user) and not event.get('retry_of') and cmd not in ('/new', 'новая тренировка'):
-            replies = ['Предыдущая реплика ещё не обработана. Нажми «Повторить обработку» или «Новая тренировка».']
+            replies = (['Повторная попытка уже использована. Нажми «Пропустить эту реплику» или «Завершить тренировку».']
+                       if failed else ['Необработанных реплик нет. Сохранённые ответы доставляются автоматически.'])
+        elif cmd in SKIP:
+            self.omit_failed(s, event, failed)
+            replies = ['Проблемная реплика пропущена и не повлияет на оценку. Продолжайте разговор или завершите тренировку.'
+                       if failed else 'Нет реплики, которую нужно пропустить.']
+        elif failed and not event.get('retry_of') and cmd not in ('/new', 'новая тренировка', '/recheck', 'обновить разбор') and not is_finish_command(text):
+            replies = ['Реплика не обработана. Можно повторить один раз, пропустить её или завершить тренировку.']
         elif cmd in ('/new', 'новая тренировка'):
             self.store.discard_failed(user)
             s = session_empty()
@@ -52,7 +81,18 @@ class Engine:
                     target = next((x for x in self.store.recent(user) if x['id'] == sid), {})
                 except (ValueError, IndexError):
                     target = {}
-            replies = [target.get('report') or 'Сохранённого разбора для этой тренировки нет.']
+            report = target.get('report')
+            if report and target.get('versions', {}).get('rubric') != RUBRIC_VERSION:
+                report = ('Это разбор прежней версии: его выводы требуют перепроверки. '
+                          'Для текущей завершённой тренировки доступно «Обновить разбор».\n\n' + report)
+            replies = [report or 'Сохранённого разбора для этой тренировки нет.']
+        elif cmd in ('/recheck', 'обновить разбор'):
+            if s['phase'] != 'completed' or not s['card'] or not any(m['role'] == 'user' for m in s['history']):
+                replies = ['Обновить можно разбор текущей завершённой тренировки с репликами менеджера.']
+            else:
+                self.omit_failed(s, event, failed)
+                self.make_report(s, event)
+                replies = [s['report'], 'Разбор обновлён. Новая тренировка не списана.']
         elif cmd in ('/scenario', 'показать скрытый сценарий'):
             if s['phase'] != 'completed':
                 replies = ['Скрытый сценарий доступен после завершения и разбора тренировки.']
@@ -78,16 +118,17 @@ class Engine:
                 replies = ['Привет! Это Академия продаж. Клиент не подсказывает во время разговора; разбор — после завершения. '
                            'Можно писать или отправлять голосовые до 3 минут.\n\n' + menu()]
         elif is_finish_command(text):
-            if s['phase'] not in ('active', 'closed'):
+            self.omit_failed(s, event, failed)
+            if s['phase'] == 'completed' and s['report']:
+                replies = [s['report']]
+            elif s['phase'] not in ('active', 'closed'):
                 replies = ['Активной тренировки нет.']
             elif not any(m['role'] == 'user' for m in s['history']):
                 s['phase'] = 'completed'
                 s['report'] = 'Тренировка завершена без реплик менеджера. Оценка не выставлена, попытка не списана.'
                 replies = [s['report']]
             else:
-                data = self.ai.evaluate(s)
-                s['report_data'] = data
-                s['report'] = render_report(data, s)
+                self.make_report(s, event)
                 s['phase'] = 'completed'
                 replies = [s['report'], 'Разбор сохранён. Доступны «Показать скрытый сценарий» и «Новая тренировка».']
         elif s['phase'] == 'completed':
@@ -110,9 +151,10 @@ class Engine:
                     replies += ['Разговор закончен. Нажми «Завершить тренировку» — получишь разбор.']
         elif s['phase'] == 'ready' and cmd in ('начать тренировку', '/begin'):
             if user not in self.admin_ids and self.store.attempts(user) >= self.limit:
-                replies = [f'Использованы все {self.limit} бесплатные тренировки. Сохранённые разборы доступны в «Мои тренировки».']
+                replies = [f'Использованы все {self.limit} бесплатные тренировки. Сохранённые разборы доступны в «Мои тренировки».\n\n' + s['knowledge']['offer']]
             else:
-                s['card'] = s['card'] or self.ai.card(s['fields'])
+                s['card'] = s['card'] or self.ai.card({**s['fields'], 'situation': s['setup'],
+                    'corporate_knowledge': {k: s['knowledge'][k] for k in ('product_knowledge', 'company_rules')}})
                 s['state'] = initial_state()
                 s['phase'] = 'active'
                 s['versions'].update(model=self.ai.model, evaluator=self.ai.eval_model,
@@ -125,6 +167,7 @@ class Engine:
         elif cmd in TEMPLATES and s['phase'] in ('setup', 'ready'):
             t = template(cmd)
             s['template'], s['card'] = cmd, t['card']
+            s['source'] = t.get('source', 'company' if s['knowledge']['scenarios'] else 'demo')
             s['fields'].update({k: t[k] for k in ('product', 'customer', 'goal')})
             s['phase'], s['awaiting'] = 'ready', None
             replies = [self.setup_summary(s)]

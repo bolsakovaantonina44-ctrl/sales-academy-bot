@@ -17,10 +17,16 @@ def plan(**changes):
 def evaluation(s):
     mid = next(i+1 for i,m in enumerate(s['history']) if m['role']=='user')
     quote = s['history'][mid-1]['content']
+    evidence = [dict(message_id=mid, speaker='manager', quote=quote)]
     return dict(simulation_valid=True, simulation_issues=[],
-        skills=[dict(id=k, score=m//2, reason='Основание по диалогу', evidence=[dict(message_id=mid, quote=quote)]) for k,_,m in SKILLS],
-        goal='partial', outcome=1, next_step='', strengths=['Вопрос'], mistakes=['Не уточнил задачу'],
-        recommendations=['Уточнить задачу'], revealed=['need'], missed=[])
+        skills=[dict(id=k, score=m//2, reason='Основание по диалогу', evidence=[dict(message_id=mid, speaker='manager', quote=quote)]) for k,_,m in SKILLS],
+        goal='partial', outcome=1, next_step='', next_step_status='absent',
+        strengths=[dict(text='Вопрос', evidence=evidence)],
+        mistakes=[dict(text='Не уточнил последствия', evidence=evidence)],
+        recommendations=[dict(skill_id='needs', observation='Не уточнил последствия', evidence=evidence,
+                              business_risk='Аргумент может не попасть в задачу', exercise='Задать вопрос о последствиях',
+                              example='Что происходит при задержке?', success_check='В повторе уточнены последствия')],
+        revealed=['need'], missed=[])
 
 
 class FakeAI:
@@ -102,7 +108,9 @@ class CoreTests(unittest.TestCase):
             try:self.engine.handle(e)
             except ValueError:self.store.fail(e,'ValueError')
         self.ai.fail=False; self.send('/retry')
-        self.assertIsNone(self.store.failed(10)); self.assertEqual(len(self.store.current(10)['history']),3)
+        self.assertIsNotNone(self.store.failed(10))
+        self.send('/skip')
+        self.assertIsNone(self.store.failed(10)); self.assertEqual(len(self.store.current(10)['history']),1)
     def test_delivery_retry_does_not_call_model(self):
         self.talk(); called=self.ai.calls
         def bad(chat,text):raise OSError('timeout')

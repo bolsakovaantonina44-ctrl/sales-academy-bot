@@ -3,7 +3,7 @@ import json
 import sqlite3
 from pathlib import Path
 from contextlib import contextmanager
-from .domain import chunks, session_empty
+from .domain import chunks, session_empty, upgrade_session, is_finish_command, normalize_command
 
 
 def dump(value):
@@ -31,6 +31,10 @@ class Store:
             CREATE INDEX IF NOT EXISTS ix_outbox_user ON outbox(user_id,sent,id);
             CREATE INDEX IF NOT EXISTS ix_sessions_user ON sessions(user_id,id);
             ''')
+            columns = {row[1] for row in db.execute('PRAGMA table_info(inbox)')}
+            if 'raw_text' not in columns:
+                db.execute('ALTER TABLE inbox ADD COLUMN raw_text TEXT')
+                db.execute('UPDATE inbox SET raw_text=text')
 
     @contextmanager
     def db(self):
@@ -50,8 +54,8 @@ class Store:
 
     def enqueue(self, event_key, user_id, chat_id, kind, text):
         with self.db() as db:
-            return db.execute('INSERT OR IGNORE INTO inbox(event_key,user_id,chat_id,kind,text) VALUES(?,?,?,?,?)',
-                              (event_key, user_id, chat_id, kind, text)).rowcount == 1
+            return db.execute('INSERT OR IGNORE INTO inbox(event_key,user_id,chat_id,kind,text,raw_text) VALUES(?,?,?,?,?,?)',
+                              (event_key, user_id, chat_id, kind, text, text)).rowcount == 1
 
     def claim(self):
         with self.db() as db:
@@ -64,7 +68,7 @@ class Store:
         with self.db() as db:
             row = db.execute('SELECT s.payload FROM users u JOIN sessions s ON s.id=u.current_id WHERE u.user_id=?',
                              (user_id,)).fetchone()
-            return json.loads(row[0]) if row else session_empty()
+            return upgrade_session(json.loads(row[0])) if row else session_empty()
 
     def attempts(self, user_id):
         with self.db() as db:
@@ -73,7 +77,7 @@ class Store:
     def recent(self, user_id):
         with self.db() as db:
             rows = db.execute('SELECT payload FROM sessions WHERE user_id=? ORDER BY id DESC LIMIT 10', (user_id,)).fetchall()
-        return [json.loads(r[0]) for r in rows]
+        return [upgrade_session(json.loads(r[0])) for r in rows]
 
     def failed(self, user_id):
         with self.db() as db:
@@ -85,10 +89,12 @@ class Store:
         # Resume exact persisted input; a voice transcription is cached separately.
         restored = dict(failed)
         restored['id'] = event['id']
-        restored['retry_of'] = failed['id']
+        restored['retry_of'] = failed.get('retry_of') or failed['id']
+        restored['attempts'] = failed['attempts'] + 1
         with self.db() as db:
-            db.execute('UPDATE inbox SET kind=?,text=?,retry_of=? WHERE id=?',
-                       (failed['kind'], failed['text'], failed['id'], event['id']))
+            db.execute('UPDATE inbox SET kind=?,text=?,raw_text=?,retry_of=?,attempts=? WHERE id=?',
+                       (failed['kind'], failed['text'], failed.get('raw_text', failed['text']),
+                        restored['retry_of'], restored['attempts'], event['id']))
         return restored
 
     def cache_text(self, event_id, text):
@@ -116,18 +122,27 @@ class Store:
             db.execute("UPDATE inbox SET status='done' WHERE id=?", (event['id'],))
             if event.get('retry_of'):
                 db.execute("UPDATE inbox SET status='done' WHERE user_id=? AND status='failed'", (event['user_id'],))
+            if event.get('discard_failed'):
+                db.execute("UPDATE inbox SET status='discarded' WHERE user_id=? AND status='failed'", (event['user_id'],))
             for reply in replies:
                 for part in chunks(reply):
                     db.execute('INSERT INTO outbox(user_id,chat_id,body) VALUES(?,?,?)',
                                (event['user_id'], event['chat_id'], part))
 
     def fail(self, event, kind):
+        report_failure = (is_finish_command(event['text']) or
+                          normalize_command(event['text']) in ('/recheck', 'обновить разбор'))
+        message = ('Не удалось подготовить проверенный разбор. Разговор сохранён; дополнительная попытка не списана. '
+                   'Нажми «Повторить обработку» — повторять разговор не нужно.' if report_failure else
+                   'Не удалось обработать реплику. Она сохранена; дополнительная попытка не списана. '
+                   'Нажми «Повторить обработку»; повторять текст или голосовое не нужно.')
+        if event.get('attempts', 1) >= 2:
+            message = ('Эту реплику не удалось обработать повторно. Она сохранена. '
+                       'Нажми «Пропустить эту реплику» или «Завершить тренировку» — разбор будет по доступному разговору.')
         with self.db() as db:
             db.execute("UPDATE inbox SET status='failed',error_kind=? WHERE id=?", (kind, event['id']))
             db.execute('INSERT INTO outbox(user_id,chat_id,body) VALUES(?,?,?)',
-                       (event['user_id'], event['chat_id'],
-                        'Не удалось обработать реплику. Она сохранена; дополнительная попытка не списана. '
-                        'Нажми «Повторить обработку»; повторять текст или голосовое не нужно.'))
+                       (event['user_id'], event['chat_id'], message))
 
     def discard_failed(self, user_id):
         with self.db() as db:
