@@ -60,7 +60,14 @@ def apply_behavior(session, plan, state):
     state['required_objection'] = ''
     state['required_objection_id'] = ''
     unseen = [b for b in barriers if b['id'] not in shown]
-    due = (2, 5, 8)[min(len(shown), 2)]
+    # Easy gives the manager room to establish contact. Medium creates resistance from the
+    # first substantive exchange; hard keeps pressure throughout the conversation.
+    schedule = {
+        'easy': (3,),
+        'medium': (1, 4),
+        'hard': (1, 3, 5),
+    }[session['fields']['difficulty']]
+    due = schedule[min(len(shown), len(schedule) - 1)]
     if unseen and substantive >= due and plan['intent'] != 'name' and state['close'] in ('continue', 'success'):
         b = unseen[0]
         state['required_objection'], state['required_objection_id'] = b['text'], b['id']
