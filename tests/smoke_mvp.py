@@ -13,12 +13,20 @@ from academy.ai import AI
 from academy.engine import Engine, deliver
 from academy.store import Store
 from academy.diagnostics import log_failure
-from bot import worker
+from bot import worker, _is_control_text
 from smoke_evaluation import main as evaluation_smoke
 from smoke_long_evaluation import main as long_evaluation_smoke
 
 
 def main():
+    # Regression boundary: Telegram controls must never become simulated manager speech.
+    for control in ('Завершить тренировку', 'Новая тренировка', 'Повторить обработку',
+                    'Скачать результат', 'Сессии пользователей', '/finish', '/report 12'):
+        if not _is_control_text(control):
+            raise RuntimeError('Control command could enter simulation: ' + control)
+    if _is_control_text('С кем можно поговорить по закупкам?'):
+        raise RuntimeError('Normal manager speech classified as control')
+
     model=os.getenv('OPENAI_MODEL','gpt-5.6-luna')
     with tempfile.TemporaryDirectory() as temp, OpenAI(api_key=os.environ['OPENAI_API_KEY'],timeout=90,max_retries=1) as client:
         ai=AI(client,model,os.getenv('OPENAI_TRANSCRIBE_MODEL','gpt-4o-mini-transcribe'),os.getenv('OPENAI_EVAL_MODEL',model))
