@@ -15,6 +15,23 @@ from academy.diagnostics import log_failure
 
 LOG = logging.getLogger('academy')
 
+CONTROL_COMMANDS = {
+    'начать тренировку', 'новая тренировка', 'завершить тренировку', 'заверши тренировку',
+    'закончить тренировку', 'закончи тренировку', 'завершить тест', 'закончить тест',
+    'повторить обработку', 'пропустить эту реплику', 'обновить разбор', 'посмотреть разбор',
+    'скачать результат', 'сформировать отчет', 'отчет сотруднику', 'отчет руководителю',
+    'показать скрытый сценарий', 'мои тренировки', 'сессии пользователей',
+    'легкий', 'лёгкий', 'средний', 'сложный', '1', '2', '3',
+}
+
+
+def _is_control_text(text):
+    """UI/system commands are never manager speech and must bypass every simulation layer."""
+    if not text:
+        return False
+    cmd = normalize_command(text)
+    return is_finish_command(text) or cmd.startswith('/') or cmd in CONTROL_COMMANDS
+
 
 def keyboard_rows(session, failed=False, admin=False):
     phase = session['phase']
@@ -95,11 +112,14 @@ def _handle_lpr_gate(store, event):
     """One realistic discovery step before the target LPR for outbound/cold scenarios."""
     if event.get('kind') != 'text':
         return False
+    text = event.get('text', '').strip()
+    # Hard safety boundary: commands/buttons are transport control, never dialogue content.
+    if _is_control_text(text):
+        return False
     s = store.current(event['user_id'])
     if s.get('phase') != 'active' or not s.get('card') or s.get('lpr_gate_passed') or _direct_lpr_known(s):
         return False
-    text = event['text'].strip()
-    if not text or normalize_command(text) in ('начать тренировку', '/begin'):
+    if not text:
         return False
     identity = s['card'].get('identity', {})
     if _lpr_search_attempt(text):
