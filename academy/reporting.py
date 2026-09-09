@@ -18,7 +18,7 @@ def fallback_data(session):
         for index, (mid, message) in enumerate(manager_turns):
             if index < len(events) and events[index].get('action') in actions[key]:
                 refs.append(dict(message_id=mid, speaker='manager', quote=message['content']))
-        skills.append(dict(id=key, score=None, reason='Баллы не выставлены. Реплики ниже — материал для ручной проверки, не подтверждённый вывод.', evidence=refs[:2]))
+        skills.append(dict(id=key, score=None, reason='Баллы не выставлены: требуется проверка сохранённого диалога.', evidence=refs[:1]))
     return dict(simulation_valid=False, simulation_issues=['Автоматическая проверка недоступна; корректность симуляции не установлена.'],
                 skills=skills, goal='unavailable', outcome=None, next_step_status='unavailable', next_step=UNAVAILABLE,
                 strengths=[], mistakes=[], findings=[], revealed=[], missed=[], technical_partial=True,
@@ -42,50 +42,44 @@ def total_score(data):
 
 
 def supervisor_recommendation(data, session):
-    """Short, cautious hiring signal. One simulation never proves trainability or final suitability."""
+    """Cautious hiring signal: one simulation can suggest level, not prove trainability."""
     score = total_score(data)
     if score is None:
-        return dict(
-            decision='Решение о найме пока не принимать: оценка этой тренировки не подтверждена.',
-            level='Уровень: не определён',
-            trainability='Обучаемость: не определена',
-            focus=['Сначала получить проверенный повторный отчёт.'])
+        return dict(decision='Решение: пока не принимать кадровое решение.',
+                    level='Уровень: не определён',
+                    trainability='Обучаемость: не определена',
+                    focus=['Получить проверенный повторный результат.'])
 
     if score >= 80:
         level = 'Уровень: сильный'
-        decision = 'Рекомендация: можно рассматривать к найму / самостоятельной работе.'
+        decision = 'Решение: можно выводить в самостоятельные продажи после короткого ввода.'
     elif score >= 65:
         level = 'Уровень: средний'
-        decision = 'Рекомендация: можно брать при стандартном вводе и контроле первых разговоров.'
+        decision = 'Решение: можно брать на испытательный срок с контролем первых разговоров.'
     elif score >= 50:
         level = 'Уровень: слабый'
-        decision = 'Рекомендация: только с обучением и повторной проверкой до самостоятельных продаж.'
+        decision = 'Решение: брать только при готовности обучать; до самостоятельных продаж — повторная проверка.'
     else:
         level = 'Уровень: слабый'
-        decision = 'Рекомендация: пока не выводить в самостоятельные продажи; сначала обучение и повторная проверка.'
+        decision = 'Решение: пока не выводить в продажи; сначала обучение и повторная аттестация.'
 
     previous = session.get('comparison')
     if previous and previous.get('score') is not None:
         delta = score - previous['score']
         if delta >= 8:
-            trainability = 'Обучаемость: предварительно высокая — есть заметный рост в сопоставимой тренировке.'
+            trainability = 'Обучаемость: предварительно высокая — заметен рост в сопоставимой тренировке.'
         elif delta > 0:
             trainability = 'Обучаемость: предварительно средняя — есть положительная динамика.'
         else:
-            trainability = 'Обучаемость: пока не подтверждена — в сопоставимой тренировке роста нет.'
+            trainability = 'Обучаемость: пока не подтверждена — роста в сопоставимой тренировке нет.'
     else:
-        trainability = 'Обучаемость: по одной тренировке не определяется; нужна повторная с тем же фокусом.'
+        trainability = 'Обучаемость: нужна ещё одна сопоставимая тренировка; по одной попытке вывод не делаем.'
 
-    focus = []
-    for item in data.get('mistakes', [])[:2]:
-        if item.get('text'):
-            focus.append(item['text'])
+    focus = [item['text'] for item in data.get('mistakes', [])[:2] if item.get('text')]
     if not focus:
-        for task in data.get('recommendations', [])[:2]:
-            if task.get('observation'):
-                focus.append(task['observation'])
+        focus = [task['observation'] for task in data.get('recommendations', [])[:2] if task.get('observation')]
     if not focus:
-        focus = ['Закрепить показанные навыки на более сложном сценарии.']
+        focus = ['Закрепить результат на более сложном сценарии.']
     return dict(decision=decision, level=level, trainability=trainability, focus=focus[:2])
 
 
@@ -95,36 +89,26 @@ def manager_summary(data, session):
     focus = session.get('training_focus')
     focus_label = FOCUS_OBJECTIONS.get(focus, {}).get('label', 'Общий разговор')
     verdict = supervisor_recommendation(data, session)
-    lines = ['РЕЗУЛЬТАТ ДЛЯ РУКОВОДИТЕЛЯ',
-             'Сотрудник: ' + (employee.get('name') or 'ФИО не указано') + ' · ID ' + str(employee.get('id', 'не указан')),
-             'Дата: ' + session.get('completed_at', session.get('started_at', 'не сохранена')),
-             'Сценарий: ' + session['fields']['customer'] + ' / ' + session['fields']['goal'],
-             'Фокус тренировки: ' + focus_label,
-             'Сложность: ' + {'easy':'1 — лёгкая', 'medium':'2 — средняя', 'hard':'3 — сложная'}[session['fields']['difficulty']],
-             'Общий балл: ' + (f'{score}/100' if score is not None else 'недоступен'),
-             '', 'КОРОТКИЙ ВЫВОД', verdict['decision'], verdict['level'], verdict['trainability'],
-             'На что обратить внимание:']
-    lines.extend('• ' + item for item in verdict['focus'])
     skills = {x['id']: x for x in data['skills']}
-    lines.append('')
+    lines = ['РЕЗУЛЬТАТ ДЛЯ РУКОВОДИТЕЛЯ',
+             'Сотрудник: ' + (employee.get('name') or 'ФИО не указано'),
+             'Фокус: ' + focus_label + ' · сложность ' + {'easy':'1', 'medium':'2', 'hard':'3'}[session['fields']['difficulty']],
+             'Общий балл: ' + (f'{score}/100' if score is not None else 'недоступен'),
+             '', verdict['decision'], verdict['level'], verdict['trainability'],
+             '', 'Зоны работы:']
+    lines.extend('• ' + item for item in verdict['focus'])
+    lines += ['', 'Навыки:']
     for key, title, maximum in SKILLS:
         value = skills[key]['score']
-        lines.append(title + ': ' + (f'{value}/{maximum}' if value is not None else 'недоступно'))
-    for title, key in [('3 сильные стороны', 'strengths'), ('3 зоны развития', 'mistakes')]:
-        lines.append(title)
-        for index in range(3):
-            value = data[key][index]['text'] if index < len(data[key]) else 'Дополнительный подтверждённый вывод отсутствует.'
-            lines.append(f'{index + 1}. {value}')
-    lines.append('2 приоритетных задания')
-    for i, task in enumerate(data['recommendations'][:2], 1):
-        lines.append(f"{i}. {task['exercise']}")
-    lines.append('Что проверить в следующей тренировке')
-    lines.extend('• ' + t['success_check'] for t in data['recommendations'])
-    lines.append('Динамика относительно прошлых тренировок')
+        lines.append('• ' + title + ': ' + (f'{value}/{maximum}' if value is not None else 'недоступно'))
+    if data.get('strengths'):
+        lines += ['', 'Сильные стороны:'] + ['• ' + x['text'] for x in data['strengths'][:2]]
+    if data.get('recommendations'):
+        lines += ['', 'Что делать дальше:'] + ['• ' + x['exercise'] for x in data['recommendations'][:2]]
     previous = session.get('comparison')
+    lines += ['', 'Динамика:']
     if previous and score is not None:
-        lines.append(f"Тренировка №{previous['session_id']}: {previous['score']}/100 → {score}/100 ({score - previous['score']:+d}).")
-        lines.append('Сравнение баллов учебных сессий, не вывод об устойчивом росте навыка.')
+        lines.append(f"№{previous['session_id']}: {previous['score']}/100 → {score}/100 ({score - previous['score']:+d}).")
     else:
-        lines.append('Нет сопоставимой проверенной оценки по той же методике, сценарию, фокусу и сложности.')
+        lines.append('Пока нет сопоставимой тренировки для оценки динамики.')
     return '\n'.join(lines)
