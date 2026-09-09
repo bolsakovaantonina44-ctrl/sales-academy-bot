@@ -10,6 +10,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether, PageBreak
 from .domain import SKILLS
 from .reporting import total_score
+from .pacing import FOCUS_OBJECTIONS
 
 
 def render_pdf(session, audience='employee'):
@@ -23,7 +24,6 @@ def render_pdf(session, audience='employee'):
         if name not in pdfmetrics.getRegisteredFontNames():
             pdfmetrics.registerFont(TTFont(name, str(font_dir / file)))
 
-    # Reports are read mostly on phones. Prefer fewer words per line and larger type over density.
     normal = ParagraphStyle('body', fontName='Academy', fontSize=10.5, leading=15.5,
                             textColor=colors.HexColor('#26354A'), spaceAfter=7)
     heading = ParagraphStyle('heading', parent=normal, fontName='AcademyBold', fontSize=14.5,
@@ -40,12 +40,14 @@ def render_pdf(session, audience='employee'):
              p('Отчёт сотруднику' if audience == 'employee' else 'Отчёт руководителю', heading)]
     employee = session.get('employee', {})
     fields = session['fields']
+    focus_label = FOCUS_OBJECTIONS.get(session.get('training_focus'), {}).get('label', 'Общий разговор')
     metadata = [
         ('Сотрудник', (employee.get('name') or 'ФИО не указано') + ' · ID ' + str(employee.get('id', 'не указан'))),
         ('Дата', session.get('completed_at', session.get('started_at', 'не сохранена'))),
         ('Сценарий', fields['customer'] + ' · ' + fields['product']),
         ('Цель', fields['goal']),
-        ('Уровень', dict(easy='Лёгкий', medium='Средний', hard='Сложный')[fields['difficulty']]),
+        ('Фокус', focus_label),
+        ('Сложность', {'easy':'1 — лёгкая', 'medium':'2 — средняя', 'hard':'3 — сложная'}[fields['difficulty']]),
         ('Тренировка', str(session['id'])),
     ]
     table = Table([[p(k, label), p(v)] for k, v in metadata], colWidths=[96, 427])
@@ -100,9 +102,10 @@ def render_pdf(session, audience='employee'):
         ]))
 
     if audience == 'supervisor':
-        # Management view starts on a clean page and is split into scan-friendly blocks.
         story += [PageBreak(), p('Коротко для руководителя', title)]
         summary_rows = [
+            [p('Сотрудник', label), p(employee.get('name') or 'ФИО не указано')],
+            [p('Фокус', label), p(focus_label)],
             [p('Общий балл', label), p(f'{score}/100' if score is not None else 'недоступен')],
             [p('Цель', label), p(goals[data['goal']])],
             [p('Коммерческий результат', label), p(str(data['outcome']) + '/3' if data['outcome'] is not None else 'недоступен')],
@@ -135,7 +138,7 @@ def render_pdf(session, audience='employee'):
             story.append(p(f"Тренировка №{previous['session_id']}: {previous['score']}/100 → {score}/100 ({score - previous['score']:+d})."))
             story.append(p('Это сравнение учебных сессий, а не вывод об устойчивом росте навыка.', small))
         else:
-            story.append(p('Нет сопоставимой проверенной оценки по той же методике, сценарию и сложности.'))
+            story.append(p('Нет сопоставимой проверенной оценки по той же методике, сценарию, фокусу и сложности.'))
 
         story.append(p('Основания по 8 навыкам', title))
         for key, skill_label, _ in SKILLS:
