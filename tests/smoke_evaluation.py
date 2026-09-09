@@ -39,8 +39,11 @@ def main():
         data = DiagnosticAI(client, model, 'unused', os.getenv('OPENAI_EVAL_MODEL', model)).evaluate(s)
     if data['next_step_status'] != 'proposed':
         raise RuntimeError('Smoke: tentative followup was not recognized')
-    if 'ПЛАН ДЛЯ РУКОВОДИТЕЛЯ' not in render_report(data, s):
-        raise RuntimeError('Smoke: manager plan missing')
+    report = render_report(data, s)
+    if 'ЧТО ОТРАБОТАТЬ' not in report or not data.get('recommendations'):
+        raise RuntimeError('Smoke: compact coaching plan missing')
+    if data['recommendations'][0]['exercise'] not in report:
+        raise RuntimeError('Smoke: coaching exercise missing from compact report')
     print('SMOKE_EVALUATION_PASS ' + json.dumps({k: data[k] for k in
           ('next_step_status', 'next_step', 'strengths', 'recommendations')}, ensure_ascii=False), flush=True)
 
