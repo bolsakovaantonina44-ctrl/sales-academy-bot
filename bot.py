@@ -121,6 +121,11 @@ def _lpr_search_attempt(text):
     return any(marker in value for marker in markers)
 
 
+def _first_name(value):
+    """Office staff usually give a first name, not a full fictional passport-style name."""
+    return (value or '').strip().split()[0] if (value or '').strip() else ''
+
+
 def _handle_lpr_gate(store, event):
     """One or two realistic discovery steps before the target LPR; never loop indefinitely."""
     if event.get('kind') != 'text':
@@ -136,7 +141,7 @@ def _handle_lpr_gate(store, event):
 
     identity = s['card'].get('identity', {})
     target = identity.get('job_title') or s['fields'].get('customer') or 'ответственный сотрудник'
-    name = identity.get('name', '').strip()
+    name = _first_name(identity.get('name', ''))
     connect = (f'Да, этим занимается {name}, {target}. Сейчас соединю.' if name
                else f'Да, этим занимается {target}. Сейчас соединю.')
     stage = s.get('lpr_gate_turns', 0)
@@ -278,104 +283,49 @@ def main():
                 employee = s.get('employee', {}).get('name') or 'ФИО не указано'
                 score = None
                 if s.get('report_data'):
-                    scored = [x.get('score') for x in s['report_data'].get('skills', []) if x.get('score') is not None]
-                    if scored:
-                        score = sum(scored)
-                suffix = f' · {score}/100' if score is not None else ''
-                lines.append(f"№{row['id']} · {employee} · user {row['user_id']} · {s.get('phase','?')}{suffix}\n{customer[:100]}")
+                    from academy.reporting import total_score
+                    score = total_score(s['report_data'])
+                lines.append(f"#{row['id']} · TG {row['user_id']} · {employee} · {customer} · "
+                             + (f'{score}/100' if score is not None else s.get('phase', ''))) 
             except Exception:
-                lines.append(f"№{row['id']} · user {row['user_id']} · данные требуют проверки")
-        lines += ['', 'Открыть разбор: /adminreport НОМЕР', 'Получить PDF: /adminpdf НОМЕР']
+                lines.append(f"#{row['id']} · TG {row['user_id']} · не удалось прочитать")
         return '\n'.join(lines)
 
     def send(chat_id, text):
-        markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
-        for row in keyboard_rows(store.current(chat_id), bool(store.failed(chat_id)), chat_id in admins):
-            markup.row(*row)
-        if text.startswith('__academy_pdf__:'):
-            _, sid, audience = text.split(':')
-            if audience == 'supervisor' and chat_id not in admins:
-                bot.send_message(chat_id, 'Расширенный отчёт доступен только администратору.', reply_markup=markup)
-                return
-            session = store.session_for_user(chat_id, int(sid))
-            if not session:
-                bot.send_message(chat_id, 'Сохранённый результат не найден.', reply_markup=markup)
-                return
-            from academy.pdf_report import render_pdf
-            document = render_pdf(session, audience)
-            bot.send_document(chat_id, document, caption='Результат тренировки · Академия продаж', reply_markup=markup)
-        else:
-            bot.send_message(chat_id, text, reply_markup=markup)
+        user_id = chat_id
+        try:
+            s = store.current(user_id)
+            markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+            for row in keyboard_rows(s, bool(store.failed(user_id)), user_id in admins):
+                markup.row(*[telebot.types.KeyboardButton(v) for v in row])
+        except Exception:
+            markup = None
+        for part in chunks(str(text)):
+            bot.send_message(chat_id, part, reply_markup=markup)
 
-    @bot.message_handler(content_types=['text', 'voice'])
-    def incoming(message):
-        if message.chat.type != 'private':
-            return
-        kind = 'voice' if message.content_type == 'voice' else 'text'
-        text = message.voice.file_id if kind == 'voice' else message.text
-
-        if kind == 'text' and message.from_user.id in admins and text:
-            cmd = normalize_command(text)
-            if cmd in ('сессии пользователей', '/admin'):
-                for part in chunks(admin_sessions_text()):
-                    send(message.chat.id, part)
-                return
-            if cmd.startswith('/adminreport '):
-                try:
-                    sid = int(cmd.split()[1])
-                except (ValueError, IndexError):
-                    send(message.chat.id, 'Формат: /adminreport НОМЕР')
-                    return
-                owner, session = load_any_session(sid)
-                if not session:
-                    send(message.chat.id, 'Сессия не найдена.')
-                    return
-                header = f"Сессия №{sid} · {session.get('employee', {}).get('name') or 'ФИО не указано'} · Telegram ID {owner}\n"
-                report = session.get('report') or 'Разбор ещё не сформирован.'
-                for part in chunks(header + report):
-                    send(message.chat.id, part)
-                return
-            if cmd.startswith('/adminpdf '):
-                try:
-                    sid = int(cmd.split()[1])
-                except (ValueError, IndexError):
-                    send(message.chat.id, 'Формат: /adminpdf НОМЕР')
-                    return
-                owner, session = load_any_session(sid)
-                if not session or not session.get('report_data'):
-                    send(message.chat.id, 'Для этой сессии пока нет готового отчёта.')
-                    return
-                send(message.chat.id, 'Готовлю файл. Это может занять около 1 минуты…')
-                from academy.pdf_report import render_pdf
-                document = render_pdf(session, 'supervisor')
-                markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
-                for row in keyboard_rows(store.current(message.chat.id), bool(store.failed(message.chat.id)), True):
-                    markup.row(*row)
-                bot.send_document(message.chat.id, document,
-                                  caption=f"Сессия №{sid} · {session.get('employee', {}).get('name') or 'ФИО не указано'} · Telegram ID {owner}",
-                                  reply_markup=markup)
-                return
-
-        if kind == 'voice' and (message.voice.duration > 180 or (message.voice.file_size or 0) > 10*1024*1024):
-            send(message.chat.id, 'Отправь голосовое до 3 минут и 10 МБ.')
-            return
-        if kind == 'text' and (not text or len(text) > 5000):
-            send(message.chat.id, 'Отправь реплику до 5000 символов.')
-            return
-        receive_text(store, f'{message.chat.id}:{message.message_id}', message.from_user.id, message.chat.id, kind, text, send)
+    def send_file(chat_id, fileobj, filename):
+        fileobj.seek(0)
+        bot.send_document(chat_id, fileobj, visible_file_name=filename)
 
     stop = threading.Event()
     thread = threading.Thread(target=worker, args=(store, engine, ai, bot, stop, send), daemon=True)
     thread.start()
-    LOG.info('Sales Academy demo-4.1 started; persistent path=%s', path)
-    faulthandler.cancel_dump_traceback_later()
+
+    @bot.message_handler(content_types=['text'])
+    def on_text(message):
+        receive_text(store, f'tg:{message.chat.id}:{message.message_id}', message.chat.id, message.chat.id,
+                     'text', message.text or '', send)
+
+    @bot.message_handler(content_types=['voice'])
+    def on_voice(message):
+        receive_text(store, f'tg:{message.chat.id}:{message.message_id}', message.chat.id, message.chat.id,
+                     'voice', message.voice.file_id, send)
+
     try:
-        bot.infinity_polling(timeout=20, long_polling_timeout=20, skip_pending=False, allowed_updates=['message'])
+        bot.infinity_polling(skip_pending=True, timeout=30, long_polling_timeout=30)
     finally:
         stop.set()
-        thread.join(timeout=5)
-        client.close()
-        lock.close()
+        thread.join(timeout=2)
 
 
 if __name__ == '__main__':
