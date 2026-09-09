@@ -25,6 +25,18 @@ def review_report(data):
     return data
 
 
+def canonicalize_evidence_refs(data, history):
+    """message_id is authoritative; speaker is derived deterministically from saved history."""
+    data = copy.deepcopy(data)
+    for field in ('skills', 'strengths', 'mistakes', 'findings', 'recommendations'):
+        for item in data[field]:
+            for ref in item['evidence']:
+                ident = ref.get('message_id')
+                if type(ident) is int and 1 <= ident <= len(history):
+                    ref['speaker'] = 'manager' if history[ident - 1]['role'] == 'user' else 'client'
+    return data
+
+
 class AI:
     def __init__(self, client, model, transcribe_model, eval_model=None):
         self.client, self.model = client, model
@@ -255,9 +267,10 @@ prior_observations — проверенные замечания прошлых 
             try:
                 data = self.request('evaluation', instructions, payload,
                                     EVAL_MODEL_SCHEMA, self.eval_model, max_output_tokens=10000)
+                data = canonicalize_evidence_refs(data, session['history'])
                 data = attach_evidence(data, session['history'])
                 check_evaluation(data, session)
-                review = self.request('evaluation_review', '''Проверь только фактическую корректность отчёта.
+                review = self.request('evaluation_review', '''Проверь только объективную фактическую корректность отчёта.
 manager — продавец-человек; client — покупатель, которого играл бот. Не продолжай разговор.
 fields — открытые исходные условия тренировки: заданные роль клиента, продукт и цель менеджера.
 Роль из fields.customer известна до диалога: упоминание собственника/закупщика не требует повторного представления в history.
@@ -269,6 +282,7 @@ fields — открытые исходные условия тренировки
 Отличай это от «менеджер отказался передать номер/согласился участвовать», когда эти действия совершил client.
 Проверь, не написано ли «не предложил следующий контакт», когда manager его предложил,
 и не объявлен ли несогласованный контакт уже назначенной встречей.
+Проверь, что findings описывают факты, реально прозвучавшие от client в ответ на вопрос manager или добровольно.
 Проверь, что задания основаны на диалоге. Отличай обещание за клиента от ссылки на его собственное ранее высказанное предложение.
 Если client сам сказал «перешлю сотруднику», пример «вы перешлёте информацию» может ссылаться на это, а не приписывать новую договорённость.
 Предложение продавца «давайте согласуем» и вопрос «сможете переслать?» — предложение будущего шага, а не утверждение о состоявшемся.
@@ -277,9 +291,11 @@ fields — открытые исходные условия тренировки
 не ошибка, если вывод подтверждён другой репликой в history и действие manager указано верно.
 Отличай описание уже случившегося от будущего упражнения, условного предложения и критерия проверки.
 Предложение «если актуально, согласуем встречу» не утверждает, что клиент уже согласился.
-Не пересчитывай баллы и не отклоняй отчёт из-за стилистических предпочтений или другой возможной стратегии.
-passed=false только при конкретной ошибке; в issues кратко укажи поле и message_id для исправления.
-Если таких ошибок нет, passed=true, issues=[].''',
+Не пересчитывай баллы и не отклоняй отчёт из-за стилистических предпочтений, строгости оценки или другой допустимой стратегии.
+Не отклоняй формулировки о степени качества («не полностью выяснил», «недостаточно уточнил», «слабо зафиксировал»),
+если история допускает такую интерпретацию. passed=false только при объективно проверяемом противоречии:
+действие приписано не тому участнику, заявлено событие которого не было, факт finding не звучал, либо статус договорённости противоречит history.
+В issues кратко укажи поле и message_id для исправления. Если таких ошибок нет, passed=true, issues=[].''',
                     {'fields': payload['fields'], 'history': payload['history'], 'report': review_report(data)}, REVIEW_SCHEMA,
                     self.eval_model, max_output_tokens=2000)
                 session.setdefault('evaluation_diagnostics', []).append({
