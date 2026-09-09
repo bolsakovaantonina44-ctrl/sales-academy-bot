@@ -102,6 +102,12 @@ def apply_behavior(session, plan, state):
     state['required_objection'] = ''
     state['required_objection_id'] = ''
     unseen = [b for b in barriers if b['id'] not in shown]
+    # A focused exercise must not end before the selected objection is ever spoken.
+    # The manager should get at least one real opportunity to handle the trained skill.
+    if state['close'] == 'refusal' and unseen:
+        state['close'] = 'continue'
+        state['agreement'] = old.get('agreement', '')
+        state['ending_reason'] = ''
     # Easy gives room to establish contact. Medium introduces resistance quickly.
     # Hard keeps pressure throughout the conversation.
     schedule = {

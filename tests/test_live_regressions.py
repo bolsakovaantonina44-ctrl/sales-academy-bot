@@ -9,7 +9,7 @@ from academy.domain import SKILLS, initial_state, reduce_plan, session_empty, re
 from academy.pacing import prepare_card, apply_behavior
 from academy.reporting import fallback_data
 from academy.scenarios import template
-from bot import receive_text, keyboard_rows
+from bot import receive_text, keyboard_rows, deliver_pdf
 import test_core as core
 
 
@@ -31,6 +31,7 @@ class LiveRegressions(unittest.TestCase):
 
     def test_receipt_while_worker_is_blocked_and_two_queued_starts(self):
         self.send('Продаю плитку'); self.send('Закупщику'); self.send('Расчёт')
+        self.send('Дорого')
         entered, release = threading.Event(), threading.Event()
         def slow_card(fields):
             entered.set(); release.wait(3); return template('1')['card']
@@ -46,7 +47,7 @@ class LiveRegressions(unittest.TestCase):
         finally:
             release.set(); thread.join(3)
         self.engine.handle(self.store.claim())
-        self.assertEqual(len(self.store.current(10)['history']), 1)
+        self.assertEqual(len(self.store.current(10)['history']), 0)
         self.assertEqual(self.ai.calls, 0)
         self.assertEqual(self.store.attempts(10), 0)
 
@@ -64,6 +65,13 @@ class LiveRegressions(unittest.TestCase):
             self.assertEqual(s['state']['close'],'refusal')
             self.assertTrue(s['state']['wrap_up'])
             self.assertEqual(s['state']['agreement'],'')
+
+    def test_focused_training_cannot_refuse_before_objection_is_spoken(self):
+        s=self.start()
+        p=core.plan(close='refusal',intent='need')
+        state=apply_behavior(s,p,reduce_plan(s['state'],p,s['card']))
+        self.assertEqual(state['close'],'continue')
+        self.assertTrue(state['required_objection'])
 
     def test_objection_is_spoken_and_hidden_information_not_given_to_writer(self):
         s=self.talk(); state=copy.deepcopy(s['state'])
@@ -83,9 +91,12 @@ class LiveRegressions(unittest.TestCase):
 
     def test_evaluator_never_receives_hidden_card_and_saves_rejections(self):
         s=self.talk(); d=core.evaluation(s)
-        ai=AI(None,'fake','fake');ai.request=Mock(side_effect=[d,dict(passed=False,issues=['next_step: contradiction']),d,dict(passed=False,issues=['next_step: contradiction'])])
+        ai=AI(None,'fake','fake');ai.request=Mock(side_effect=[
+            d,dict(passed=False,issues=['next_step: contradiction']),
+            d,dict(passed=False,issues=['next_step: contradiction']),
+            d,dict(passed=False,issues=['next_step: contradiction'])])
         with self.assertRaises(EvaluationError): ai.evaluate(s)
-        self.assertEqual(len(s['evaluation_diagnostics']),2)
+        self.assertEqual(len(s['evaluation_diagnostics']),3)
         self.assertNotIn('card',ai.request.call_args_list[0].args[2])
         self.assertEqual(ai.request.call_args_list[2].args[2]['review_feedback'],['next_step: contradiction'])
 
@@ -93,7 +104,7 @@ class LiveRegressions(unittest.TestCase):
         s=self.talk(); d=fallback_data(s); report=render_report(d,s)
         for key,title,maximum in SKILLS:
             self.assertIn(title,report)
-        for title in ('ЧТО УДАЛОСЬ ВЫЯСНИТЬ','ЧТО ОСТАЛОСЬ СКРЫТЫМ','ЧТО ПОЛУЧИЛОСЬ','ЧТО СНИЗИЛО ОЦЕНКУ','РЕЗУЛЬТАТ ДЛЯ РУКОВОДИТЕЛЯ','ЗАДАНИЯ МЕНЕДЖЕРУ'):
+        for title in ('РЕЗУЛЬТАТ ТРЕНИРОВКИ','ОЦЕНКА ПО НАВЫКАМ','ЧТО ОТРАБОТАТЬ'):
             self.assertIn(title,report)
         self.assertTrue(all(x['score'] is None for x in d['skills']))
         self.assertIsNone(d['outcome'])
@@ -125,12 +136,7 @@ class LiveRegressions(unittest.TestCase):
         self.assertFalse(any(x['body'].endswith(':supervisor') for x in self.store.outgoing(10)))
 
     def test_finish_queues_pdf_automatically_and_report_prose_is_not_amputated(self):
-        self.send('/start')
-        self.send('Тестовый Менеджер')
-        self.send('1')
-        self.send('Дорого')
-        self.send('Начать тренировку')
-        self.send('Для какой задачи вам нужен материал?')
+        self.talk()
         long_reason = ('Менеджер уточнил задачу клиента и получил содержательный ответ. '
                        'Затем предложил продолжить обсуждение на демонстрации.')
         self.ai.evaluate = Mock(return_value=core.evaluation(self.store.current(10)))
@@ -140,3 +146,14 @@ class LiveRegressions(unittest.TestCase):
         outgoing = self.store.outgoing(10)
         self.assertTrue(any(x['body'].startswith('__academy_pdf__:') for x in outgoing))
         self.assertIn(long_reason, ''.join(x['body'] for x in outgoing))
+
+    def test_pdf_marker_sends_real_document_and_enforces_audience(self):
+        done=self.talk();done=self.send('/finish')
+        telegram=Mock()
+        deliver_pdf(telegram,self.store,10,f"__academy_pdf__:{done['id']}:employee")
+        args,kwargs=telegram.send_document.call_args
+        self.assertEqual(args[0],10)
+        self.assertTrue(kwargs['visible_file_name'].endswith('.pdf'))
+        self.assertTrue(args[1].getvalue().startswith(b'%PDF-'))
+        with self.assertRaises(PermissionError):
+            deliver_pdf(telegram,self.store,10,f"__academy_pdf__:{done['id']}:supervisor")

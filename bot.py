@@ -126,6 +126,29 @@ def _first_name(value):
     return (value or '').strip().split()[0] if (value or '').strip() else ''
 
 
+def deliver_pdf(bot, store, chat_id, text, admins=()):
+    """Turn a durable outbox marker into an authorized Telegram document."""
+    marker, raw_id, audience = str(text).split(':', 2)
+    if marker != '__academy_pdf__' or audience not in ('employee', 'supervisor'):
+        raise ValueError('Invalid PDF delivery marker')
+    session_id = int(raw_id)
+    with store.db() as db:
+        row = db.execute('SELECT user_id,payload FROM sessions WHERE id=?', (session_id,)).fetchone()
+    if not row:
+        raise LookupError('Report session not found')
+    owner_id, report_session = row['user_id'], upgrade_session(json.loads(row['payload']))
+    admin_ids = set(admins)
+    if owner_id != chat_id and chat_id not in admin_ids:
+        raise PermissionError('Report session is unavailable for this chat')
+    if audience == 'supervisor' and chat_id not in admin_ids:
+        raise PermissionError('Supervisor report requires admin access')
+    from academy.pdf_report import render_pdf
+    title = 'Отчёт_руководителю' if audience == 'supervisor' else 'Разбор_тренировки'
+    fileobj = render_pdf(report_session, audience)
+    fileobj.seek(0)
+    bot.send_document(chat_id, fileobj, visible_file_name=f'{title}_{session_id}.pdf')
+
+
 def _handle_lpr_gate(store, event):
     """One or two realistic discovery steps before the target LPR; never loop indefinitely."""
     if event.get('kind') != 'text':
@@ -267,11 +290,6 @@ def main():
     admins = [int(v.strip()) for v in os.getenv('ADMIN_IDS', '').split(',') if v.strip()]
     engine = Engine(store, ai, limit=int(os.getenv('FREE_TRAININGS', '3')), admin_ids=admins)
 
-    def load_any_session(session_id):
-        with store.db() as db:
-            row = db.execute('SELECT user_id,payload FROM sessions WHERE id=?', (session_id,)).fetchone()
-        return (row['user_id'], upgrade_session(json.loads(row['payload']))) if row else (None, None)
-
     def admin_sessions_text():
         with store.db() as db:
             rows = db.execute('SELECT id,user_id,payload,counted FROM sessions ORDER BY id DESC LIMIT 15').fetchall()
@@ -293,17 +311,7 @@ def main():
 
     def send(chat_id, text):
         if str(text).startswith('__academy_pdf__:'):
-            marker, raw_id, audience = str(text).split(':', 2)
-            if marker != '__academy_pdf__' or audience not in ('employee', 'supervisor'):
-                raise ValueError('Invalid PDF delivery marker')
-            owner_id, report_session = load_any_session(int(raw_id))
-            if not report_session or (owner_id != chat_id and chat_id not in admins):
-                raise PermissionError('Report session is unavailable for this chat')
-            if audience == 'supervisor' and chat_id not in admins:
-                raise PermissionError('Supervisor report requires admin access')
-            from academy.pdf_report import render_pdf
-            title = 'Отчёт_руководителю' if audience == 'supervisor' else 'Разбор_тренировки'
-            send_file(chat_id, render_pdf(report_session, audience), f'{title}_{raw_id}.pdf')
+            deliver_pdf(bot, store, chat_id, text, admins)
             return
         user_id = chat_id
         try:
@@ -315,10 +323,6 @@ def main():
             markup = None
         for part in chunks(str(text)):
             bot.send_message(chat_id, part, reply_markup=markup)
-
-    def send_file(chat_id, fileobj, filename):
-        fileobj.seek(0)
-        bot.send_document(chat_id, fileobj, visible_file_name=filename)
 
     stop = threading.Event()
     thread = threading.Thread(target=worker, args=(store, engine, ai, bot, stop, send), daemon=True)

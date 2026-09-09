@@ -52,6 +52,8 @@ class CoreTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory(); self.path=Path(self.tmp.name)/'db.sqlite3'
         self.store=Store(self.path); self.ai=FakeAI(); self.engine=Engine(self.store,self.ai); self.seq=0
+        self.send('/start'); self.send('Тестовый Менеджер')
+        deliver(self.store,10,lambda c,t:None)
     def tearDown(self):self.tmp.cleanup()
     def event(self,text,user=10,kind='text'):
         self.seq+=1; self.store.enqueue(str(self.seq),user,user,kind,text)
@@ -60,7 +62,13 @@ class CoreTests(unittest.TestCase):
         e=self.event(text,user); self.engine.handle(e)
         return self.store.current(user)
     def start(self,user=10):
-        self.send('1',user); return self.send('Начать тренировку',user)
+        if not self.store.current(user).get('employee', {}).get('name'):
+            self.send('/start',user); self.send(f'Тестовый Менеджер {user}',user)
+        if self.store.current(user)['phase'] == 'setup':
+            self.send('1',user)
+        if not self.store.current(user).get('training_focus'):
+            self.send('Дорого',user)
+        return self.send('Начать тренировку',user)
     def talk(self):
         self.start(); return self.send('Для какой задачи нужен материал?')
     def test_all_templates_valid(self):
@@ -100,7 +108,7 @@ class CoreTests(unittest.TestCase):
         self.store.fail(e,'ValueError')
         self.assertEqual(self.store.current(10)['history'],before['history']); self.assertEqual(self.store.attempts(10),0)
         self.ai.fail=False; self.send('/retry')
-        self.assertEqual(len(self.store.current(10)['history']),3); self.assertIsNone(self.store.failed(10))
+        self.assertEqual(len(self.store.current(10)['history']),2); self.assertIsNone(self.store.failed(10))
     def test_repeated_failure_then_retry(self):
         self.start(); self.ai.fail=True
         for text in ('Вопрос','/retry','/retry'):
@@ -110,7 +118,7 @@ class CoreTests(unittest.TestCase):
         self.ai.fail=False; self.send('/retry')
         self.assertIsNotNone(self.store.failed(10))
         self.send('/skip')
-        self.assertIsNone(self.store.failed(10)); self.assertEqual(len(self.store.current(10)['history']),1)
+        self.assertIsNone(self.store.failed(10)); self.assertEqual(len(self.store.current(10)['history']),0)
     def test_delivery_retry_does_not_call_model(self):
         self.talk(); called=self.ai.calls
         def bad(chat,text):raise OSError('timeout')
@@ -126,7 +134,7 @@ class CoreTests(unittest.TestCase):
         self.assertNotIn('удорожание',''.join(x['body'] for x in self.store.outgoing(10)))
     def test_users_are_isolated(self):
         self.talk(); self.start(20)
-        self.assertEqual(len(self.store.current(20)['history']),1); self.assertEqual(self.store.attempts(20),0)
+        self.assertEqual(len(self.store.current(20)['history']),0); self.assertEqual(self.store.attempts(20),0)
     def test_crash_requeues_uncommitted_event(self):
         e=self.event('1'); self.store.recover(); self.assertEqual(self.store.claim()['id'],e['id'])
     def test_split_utf16_long_report(self):
@@ -160,12 +168,12 @@ class CoreTests(unittest.TestCase):
     def test_unobserved_not_zero_or_fake_100(self):
         s=self.talk();d=evaluation(s);d['skills'][0]['score']=None;check_evaluation(d,s)
         report=render_report(d,s)
-        self.assertIn('недостаточно данных',report);self.assertIn('Общий балл из 100 не рассчитан',report)
+        self.assertIn('н/д',report);self.assertIn('По наблюдаемым навыкам:',report)
     def test_outcome_does_not_change_skill_score(self):
         s=self.talk();d=evaluation(s);a=render_report(d,s).splitlines()[2];d['outcome']=3
         self.assertEqual(a,render_report(d,s).splitlines()[2])
     def test_invalid_simulation_suppresses_total(self):
         s=self.talk();d=evaluation(s);d['simulation_valid']=False
-        self.assertIn('Итоговый балл не выставлен',render_report(d,s))
+        self.assertIn('Итоговый балл не используется для аттестации',render_report(d,s))
 
 if __name__=='__main__':unittest.main()

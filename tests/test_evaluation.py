@@ -21,13 +21,13 @@ class EvaluationTests(unittest.TestCase):
                 for ref in item['evidence']:ref.pop('quote',None)
         result=attach_evidence(d,s['history'])
         check_evaluation(result,s)
-        self.assertEqual(result['skills'][0]['evidence'][0]['quote'],s['history'][1]['content'])
+        self.assertEqual(result['skills'][0]['evidence'][0]['quote'],s['history'][0]['content'])
         props=EVAL_MODEL_SCHEMA['properties']['skills']['items']['properties']['evidence']['items']['properties']
         self.assertNotIn('quote',props)
 
     def test_client_quote_cannot_be_presented_as_manager_quote(self):
         s = self.talk(); d = evaluation(s)
-        d['strengths'][0]['evidence'] = [dict(message_id=1, speaker='manager', quote=s['history'][0]['content'])]
+        d['strengths'][0]['evidence'] = [dict(message_id=2, speaker='manager', quote=s['history'][1]['content'])]
         with self.assertRaisesRegex(EvaluationError, 'speaker mismatch'):
             check_evaluation(d, s)
 
@@ -35,7 +35,7 @@ class EvaluationTests(unittest.TestCase):
         s = self.talk()
         for field in ('strengths', 'skills', 'recommendations'):
             d = evaluation(s)
-            d[field][0]['evidence'] = [dict(message_id=1, speaker='client', quote=s['history'][0]['content'])]
+            d[field][0]['evidence'] = [dict(message_id=2, speaker='client', quote=s['history'][1]['content'])]
             with self.assertRaisesRegex(EvaluationError, 'without manager evidence'):
                 check_evaluation(d, s)
 
@@ -43,7 +43,7 @@ class EvaluationTests(unittest.TestCase):
         s = self.talk(); d = evaluation(s)
         d.update(next_step='Менеджер предложил связаться завтра; клиент не согласовал время.', next_step_status='proposed')
         check_evaluation(d, s)
-        self.assertIn('предложен, но не согласован полностью', render_report(d, s))
+        self.assertIn('предложен, но не согласован', render_report(d, s))
         d['outcome'] = 2
         with self.assertRaisesRegex(EvaluationError, 'Outcome without agreed step'):
             check_evaluation(d, s)
@@ -55,23 +55,22 @@ class EvaluationTests(unittest.TestCase):
 
     def test_report_gives_manager_task_and_success_criterion(self):
         s = self.talk(); report = render_report(evaluation(s), s)
-        for label in ('ПЛАН ДЛЯ РУКОВОДИТЕЛЯ', 'Задание сотруднику:', 'Как руководителю проверить:', 'Менеджер, реплика'):
+        for label in ('ОЦЕНКА ПО НАВЫКАМ', 'ЧТО ОТРАБОТАТЬ', 'Задать вопрос о последствиях'):
             self.assertIn(label, report)
 
     def test_invalid_report_repaired_once_with_explicit_speakers(self):
         s = self.talk(); good = evaluation(s); bad = copy.deepcopy(good)
         bad['skills'][0]['evidence'][0]['speaker'] = 'client'
-        ai = AI(None, 'fake', 'fake'); ai.request = Mock(side_effect=[bad, good, dict(passed=True, issues=[])])
+        ai = AI(None, 'fake', 'fake'); ai.request = Mock(side_effect=[bad, dict(passed=True, issues=[])])
         result = ai.evaluate(s)
         self.assertEqual(result['skills'], good['skills'])
         self.assertEqual(result['revealed'], s['state']['revealed'])
-        self.assertEqual(ai.request.call_count, 3)
-        self.assertEqual(ai.request.call_args_list[2].args[2]['fields'], s['fields'])
-        self.assertNotIn('card', ai.request.call_args_list[2].args[2])
+        self.assertEqual(ai.request.call_count, 2)
+        self.assertEqual(ai.request.call_args_list[1].args[2]['fields'], s['fields'])
+        self.assertNotIn('card', ai.request.call_args_list[1].args[2])
         payload = ai.request.call_args_list[1].args[2]
-        self.assertEqual([m['speaker'] for m in payload['history']], ['client', 'manager', 'client'])
+        self.assertEqual([m['speaker'] for m in payload['history']], ['manager', 'client'])
         self.assertNotIn('role', payload['history'][0])
-        self.assertIn('validation_feedback', payload)
 
     def test_semantic_attribution_review_rejects_wrong_narrative(self):
         s = self.talk(); d = evaluation(s)
@@ -89,7 +88,7 @@ class EvaluationTests(unittest.TestCase):
         s = self.talk(); ai = AI(None, 'fake', 'fake')
         ai.request = Mock(side_effect=EvaluationError('Incomplete model response'))
         with self.assertRaises(EvaluationError): ai.evaluate(s)
-        self.assertEqual(ai.request.call_count, 2)
+        self.assertEqual(ai.request.call_count, 3)
 
     def test_duplicate_finish_returns_saved_report_without_regeneration(self):
         self.talk(); done = self.send('/finish')

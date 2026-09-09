@@ -28,8 +28,10 @@ class TransportTests(unittest.TestCase):
     def test_voice_retry_transcribes_once_and_commits_one_turn(self):
         with tempfile.TemporaryDirectory() as temp:
             s=Store(Path(temp)/'db');a=FakeAI();e=Engine(s,a)
-            for i,t in enumerate(['1','Начать тренировку']):
+            for i,t in enumerate(['/start','Тестовый Менеджер','1','Дорого','Начать тренировку']):
                 s.enqueue(str(i),1,1,'text',t);e.handle(s.claim())
+            session=s.current(1);session['lpr_gate_passed']=True
+            s.enqueue('gate-state',1,1,'text','test setup');s.commit(s.claim(),session,[])
             transcript=Mock(return_value=SimpleNamespace(text='Для чего нужен материал?'))
             a.client=SimpleNamespace(audio=SimpleNamespace(transcriptions=SimpleNamespace(create=transcript)))
             b=SimpleNamespace(send_chat_action=Mock(),get_file=Mock(return_value=SimpleNamespace(file_path='voice')),
@@ -43,10 +45,10 @@ class TransportTests(unittest.TestCase):
                 self.assertIsNotNone(s.failed(1));a.fail=False
                 s.enqueue('retry',1,1,'text','/retry')
                 deadline=time.monotonic()+3
-                while len(s.current(1)['history'])<3 and time.monotonic()<deadline:time.sleep(.01)
-                self.assertEqual(len(s.current(1)['history']),3)
+                while len(s.current(1)['history'])<2 and time.monotonic()<deadline:time.sleep(.01)
+                self.assertEqual(len(s.current(1)['history']),2)
                 self.assertEqual(transcript.call_count,1)
-                self.assertEqual(s.current(1)['history'][1]['content'],'Для чего нужен материал?')
+                self.assertEqual(s.current(1)['history'][0]['content'],'Для чего нужен материал?')
                 self.assertIsNone(s.failed(1))
             finally:stop.set();thread.join(3)
     def test_writer_receives_no_hidden_card(self):
