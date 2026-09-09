@@ -41,19 +41,72 @@ def total_score(data):
     return sum(x['score'] for x in data['skills'])
 
 
+def supervisor_recommendation(data, session):
+    """Short, cautious hiring signal. One simulation never proves trainability or final suitability."""
+    score = total_score(data)
+    if score is None:
+        return dict(
+            decision='Решение о найме пока не принимать: оценка этой тренировки не подтверждена.',
+            level='Уровень: не определён',
+            trainability='Обучаемость: не определена',
+            focus=['Сначала получить проверенный повторный отчёт.'])
+
+    if score >= 80:
+        level = 'Уровень: сильный'
+        decision = 'Рекомендация: можно рассматривать к найму / самостоятельной работе.'
+    elif score >= 65:
+        level = 'Уровень: средний'
+        decision = 'Рекомендация: можно брать при стандартном вводе и контроле первых разговоров.'
+    elif score >= 50:
+        level = 'Уровень: слабый'
+        decision = 'Рекомендация: только с обучением и повторной проверкой до самостоятельных продаж.'
+    else:
+        level = 'Уровень: слабый'
+        decision = 'Рекомендация: пока не выводить в самостоятельные продажи; сначала обучение и повторная проверка.'
+
+    previous = session.get('comparison')
+    if previous and previous.get('score') is not None:
+        delta = score - previous['score']
+        if delta >= 8:
+            trainability = 'Обучаемость: предварительно высокая — есть заметный рост в сопоставимой тренировке.'
+        elif delta > 0:
+            trainability = 'Обучаемость: предварительно средняя — есть положительная динамика.'
+        else:
+            trainability = 'Обучаемость: пока не подтверждена — в сопоставимой тренировке роста нет.'
+    else:
+        trainability = 'Обучаемость: по одной тренировке не определяется; нужна повторная с тем же фокусом.'
+
+    focus = []
+    for item in data.get('mistakes', [])[:2]:
+        if item.get('text'):
+            focus.append(item['text'])
+    if not focus:
+        for task in data.get('recommendations', [])[:2]:
+            if task.get('observation'):
+                focus.append(task['observation'])
+    if not focus:
+        focus = ['Закрепить показанные навыки на более сложном сценарии.']
+    return dict(decision=decision, level=level, trainability=trainability, focus=focus[:2])
+
+
 def manager_summary(data, session):
     score = total_score(data)
     employee = session.get('employee', {})
     focus = session.get('training_focus')
     focus_label = FOCUS_OBJECTIONS.get(focus, {}).get('label', 'Общий разговор')
+    verdict = supervisor_recommendation(data, session)
     lines = ['РЕЗУЛЬТАТ ДЛЯ РУКОВОДИТЕЛЯ',
              'Сотрудник: ' + (employee.get('name') or 'ФИО не указано') + ' · ID ' + str(employee.get('id', 'не указан')),
              'Дата: ' + session.get('completed_at', session.get('started_at', 'не сохранена')),
              'Сценарий: ' + session['fields']['customer'] + ' / ' + session['fields']['goal'],
              'Фокус тренировки: ' + focus_label,
              'Сложность: ' + {'easy':'1 — лёгкая', 'medium':'2 — средняя', 'hard':'3 — сложная'}[session['fields']['difficulty']],
-             'Общий балл: ' + (f'{score}/100' if score is not None else 'недоступен')]
+             'Общий балл: ' + (f'{score}/100' if score is not None else 'недоступен'),
+             '', 'КОРОТКИЙ ВЫВОД', verdict['decision'], verdict['level'], verdict['trainability'],
+             'На что обратить внимание:']
+    lines.extend('• ' + item for item in verdict['focus'])
     skills = {x['id']: x for x in data['skills']}
+    lines.append('')
     for key, title, maximum in SKILLS:
         value = skills[key]['score']
         lines.append(title + ': ' + (f'{value}/{maximum}' if value is not None else 'недоступно'))
