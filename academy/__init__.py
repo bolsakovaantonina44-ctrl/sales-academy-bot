@@ -1,0 +1,6 @@
+"""Academy package bootstrap."""
+from . import domain as _domain
+from .report_text import render_report as _render_report, partial_report as _partial_report
+
+_domain.render_report = _render_report
+_domain.partial_report = _partial_report
