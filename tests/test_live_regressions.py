@@ -7,7 +7,7 @@ from unittest.mock import Mock
 from academy.ai import AI
 from academy.domain import SKILLS, initial_state, reduce_plan, session_empty, render_report, EvaluationError
 from academy.pacing import prepare_card, apply_behavior
-from academy.reporting import fallback_data
+from academy.reporting import fallback_data, recommended_training_cases
 from academy.scenarios import template
 from bot import receive_text, keyboard_rows, deliver_pdf
 import test_core as core
@@ -50,6 +50,26 @@ class LiveRegressions(unittest.TestCase):
         self.assertEqual(len(self.store.current(10)['history']), 0)
         self.assertEqual(self.ai.calls, 0)
         self.assertEqual(self.store.attempts(10), 0)
+
+    def test_repeated_finish_taps_are_coalesced_while_report_is_working(self):
+        self.talk()
+        received = []
+        self.assertTrue(receive_text(self.store, 'finish1', 10, 10, 'text', 'Завершить тренировку',
+                                     lambda c, t: received.append(t)))
+        event = self.store.claim()
+        self.assertFalse(receive_text(self.store, 'finish2', 10, 10, 'text', 'Завершить тренировку',
+                                      lambda c, t: received.append(t)))
+        self.assertFalse(receive_text(self.store, 'finish3', 10, 10, 'text', '/finish',
+                                      lambda c, t: received.append(t)))
+        self.assertEqual(received[0], 'Завершаю тренировку. Готовлю разбор — это может занять около 1 минуты…')
+        self.assertEqual(received[1:], [
+            'Разбор уже формируется. Повторно нажимать «Завершить тренировку» не нужно.',
+            'Разбор уже формируется. Повторно нажимать «Завершить тренировку» не нужно.',
+        ])
+        self.engine.handle(event)
+        bodies = [item['body'] for item in self.store.outgoing(10)]
+        self.assertEqual(sum(body.startswith('РЕЗУЛЬТАТ ТРЕНИРОВКИ') for body in bodies), 1)
+        self.assertEqual(sum(body.startswith('__academy_pdf__:') for body in bodies), 1)
 
     def test_levels_have_required_barriers_and_natural_end(self):
         for level, count in [('easy',1),('medium',2),('hard',3)]:
@@ -146,6 +166,13 @@ class LiveRegressions(unittest.TestCase):
         outgoing = self.store.outgoing(10)
         self.assertTrue(any(x['body'].startswith('__academy_pdf__:') for x in outgoing))
         self.assertIn(long_reason, ''.join(x['body'] for x in outgoing))
+        self.assertIn('КАК ИСПОЛЬЗОВАТЬ ТРЕНАЖЁР ДАЛЬШЕ', ''.join(x['body'] for x in outgoing))
+
+    def test_report_prescribes_two_concrete_reuses_of_trainer(self):
+        s=self.talk();data=core.evaluation(s)
+        cases=recommended_training_cases(data,s)
+        self.assertEqual(len(cases),2)
+        self.assertTrue(all(case.endswith('.') for case in cases))
 
     def test_pdf_marker_sends_real_document_and_enforces_audience(self):
         done=self.talk();done=self.send('/finish')

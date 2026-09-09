@@ -54,6 +54,15 @@ class Store:
 
     def enqueue(self, event_key, user_id, chat_id, kind, text):
         with self.db() as db:
+            # Telegram reply-keyboard taps have different message IDs. While a slow
+            # evaluation is running, coalesce repeated finish taps into one event.
+            if kind == 'text' and is_finish_command(text):
+                pending = db.execute(
+                    "SELECT text FROM inbox WHERE user_id=? AND status IN ('queued','working','waiting')",
+                    (user_id,),
+                ).fetchall()
+                if any(is_finish_command(row['text']) for row in pending):
+                    return False
             return db.execute('INSERT OR IGNORE INTO inbox(event_key,user_id,chat_id,kind,text,raw_text) VALUES(?,?,?,?,?,?)',
                               (event_key, user_id, chat_id, kind, text, text)).rowcount == 1
 

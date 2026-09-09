@@ -9,7 +9,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether, PageBreak
 from .domain import SKILLS
-from .reporting import total_score, supervisor_recommendation
+from .reporting import total_score, supervisor_recommendation, recommended_training_cases
 from .pacing import FOCUS_OBJECTIONS
 
 
@@ -100,6 +100,10 @@ def render_pdf(session, audience='employee'):
         story.append(p('Что отработать дальше', heading))
         for i, task in enumerate(data['recommendations'][:2], 1):
             story.append(KeepTogether([p(f"{i}. {task['exercise']}"), p('Пример: ' + task['example'])]))
+        training_cases = recommended_training_cases(data, session)
+        if training_cases:
+            story.append(p('Как использовать тренажёр дальше', heading))
+            story += [p(f'{i}. Повторить тренировку: {case}') for i, case in enumerate(training_cases, 1)]
     else:
         verdict = supervisor_recommendation(data, session)
         story += [PageBreak(), p('Коротко для руководителя', title),
@@ -119,6 +123,11 @@ def render_pdf(session, audience='employee'):
             story += [p(f'{i}. {task["exercise"]}') for i, task in enumerate(data['recommendations'][:2], 1)]
             story.append(p('Что проверить на повторной тренировке', heading))
             story += [p('• ' + task['success_check']) for task in data['recommendations'][:2]]
+        training_cases = recommended_training_cases(data, session)
+        if training_cases:
+            story.append(p('Как использовать тренажёр дальше', heading))
+            story.append(p('Рекомендуется назначить сотруднику следующие повторные тренировки:'))
+            story += [p(f'{i}. {case}') for i, case in enumerate(training_cases, 1)]
 
         previous = session.get('comparison')
         story.append(p('Динамика', heading))

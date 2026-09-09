@@ -192,7 +192,7 @@ class Engine:
         elif is_finish_command(text):
             self.omit_failed(s, event, failed)
             if s['phase'] == 'completed' and s['report']:
-                replies = [s['report']]
+                replies = ['Разбор уже сформирован. Нажмите «Посмотреть разбор» или «Скачать результат».']
             elif s['phase'] not in ('active', 'closed'):
                 replies = ['Активной тренировки нет.']
             elif not any(m['role'] == 'user' for m in s['history']):

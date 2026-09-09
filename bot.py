@@ -84,15 +84,20 @@ def keyboard_rows(session, failed=False, admin=False):
 
 def receive_text(store, event_key, user_id, chat_id, kind, text, send):
     accepted = store.enqueue(event_key, user_id, chat_id, kind, text)
-    if accepted and kind == 'text':
+    if kind == 'text':
         cmd = normalize_command(text)
-        if cmd in ('начать тренировку', '/begin'):
+        if is_finish_command(text) and not accepted:
+            try:
+                send(chat_id, 'Разбор уже формируется. Повторно нажимать «Завершить тренировку» не нужно.')
+            except Exception:
+                pass
+        elif accepted and cmd in ('начать тренировку', '/begin'):
             try:
                 send(chat_id, 'Запускаю тренировку…' if store.current(user_id)['phase'] == 'ready'
                      else 'Запрос принят. Проверяю состояние тренировки…')
             except Exception:
                 pass
-        elif is_finish_command(text):
+        elif accepted and is_finish_command(text):
             try:
                 send(chat_id, 'Завершаю тренировку. Готовлю разбор — это может занять около 1 минуты…')
             except Exception:
@@ -315,10 +320,13 @@ def main():
             return
         user_id = chat_id
         try:
-            s = store.current(user_id)
-            markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
-            for row in keyboard_rows(s, bool(store.failed(user_id)), user_id in admins):
-                markup.row(*[telebot.types.KeyboardButton(v) for v in row])
+            if str(text).startswith(('Завершаю тренировку.', 'Разбор уже формируется.')):
+                markup = telebot.types.ReplyKeyboardRemove()
+            else:
+                s = store.current(user_id)
+                markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+                for row in keyboard_rows(s, bool(store.failed(user_id)), user_id in admins):
+                    markup.row(*[telebot.types.KeyboardButton(v) for v in row])
         except Exception:
             markup = None
         for part in chunks(str(text)):

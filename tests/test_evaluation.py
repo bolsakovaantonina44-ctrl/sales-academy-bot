@@ -96,6 +96,8 @@ class EvaluationTests(unittest.TestCase):
         again = self.send('/finish')
         self.assertEqual(again['report'], done['report'])
         self.assertEqual(self.store.attempts(10), 1)
+        self.assertEqual(self.store.outgoing(10)[-1]['body'],
+                         'Разбор уже сформирован. Нажмите «Посмотреть разбор» или «Скачать результат».')
 
     def test_failed_finish_can_be_retried_by_finish_button(self):
         before = self.talk(); self.ai.fail = True; event = self.event('/finish')

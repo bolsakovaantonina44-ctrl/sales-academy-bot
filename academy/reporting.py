@@ -45,23 +45,23 @@ def supervisor_recommendation(data, session):
     """Cautious hiring signal: one simulation can suggest level, not prove trainability."""
     score = total_score(data)
     if score is None:
-        return dict(decision='Решение: пока не принимать кадровое решение.',
+        return dict(decision='Допуск к самостоятельным продажам: пока не определён.',
                     level='Уровень: не определён',
                     trainability='Обучаемость: не определена',
                     focus=['Получить проверенный повторный результат.'])
 
     if score >= 80:
         level = 'Уровень: сильный'
-        decision = 'Решение: можно выводить в самостоятельные продажи после короткого ввода.'
+        decision = 'Допуск: можно переходить к самостоятельным разговорам после короткого ввода.'
     elif score >= 65:
         level = 'Уровень: средний'
-        decision = 'Решение: можно брать на испытательный срок с контролем первых разговоров.'
+        decision = 'Допуск: можно переходить к реальным разговорам под контролем руководителя.'
     elif score >= 50:
         level = 'Уровень: слабый'
-        decision = 'Решение: брать только при готовности обучать; до самостоятельных продаж — повторная проверка.'
+        decision = 'Допуск: сначала повторная тренировка по зонам роста, затем контрольная проверка.'
     else:
         level = 'Уровень: слабый'
-        decision = 'Решение: пока не выводить в продажи; сначала обучение и повторная аттестация.'
+        decision = 'Допуск: сначала обучение и повторная аттестация, затем решение о реальных разговорах.'
 
     previous = session.get('comparison')
     if previous and previous.get('score') is not None:
@@ -81,6 +81,34 @@ def supervisor_recommendation(data, session):
     if not focus:
         focus = ['Закрепить результат на более сложном сценарии.']
     return dict(decision=decision, level=level, trainability=trainability, focus=focus[:2])
+
+
+def recommended_training_cases(data, session):
+    """Turn report priorities into concrete ways to reuse the trainer."""
+    focus_label = FOCUS_OBJECTIONS.get(session.get('training_focus'), {}).get('label', 'выбранное возражение')
+    cases = {
+        'contact': 'Первый холодный контакт: за 20–30 секунд обозначить причину обращения и получить разрешение на два вопроса.',
+        'questions': 'Клиент отвечает кратко: задать вопросы о задаче, сроке и критериях выбора без ощущения допроса.',
+        'needs': 'Клиент просит цену или демонстрацию до диагностики: выявить задачу и риск до презентации решения.',
+        'listening': 'Клиент называет приоритет или ограничение: отразить его и адаптировать следующий вопрос.',
+        'control': 'Разговор уходит в детали: задать рамку, вернуть беседу к цели и вести к следующему шагу.',
+        'arguments': 'Клиент сомневается в ценности: связать один аргумент только с ранее озвученной потребностью.',
+        'objections': f'Клиент говорит «{focus_label}»: уточнить причину, ответить через потребность и проверить, снято ли возражение.',
+        'next_step': 'Клиент не готов к встрече и просит материалы: согласовать канал, срок, ответственного и условие следующей связи.',
+    }
+    priorities = []
+    for item in data.get('recommendations', []):
+        skill_id = item.get('skill_id')
+        if skill_id in cases and skill_id not in priorities:
+            priorities.append(skill_id)
+    if len(priorities) < 2:
+        maxima = {key: maximum for key, _, maximum in SKILLS}
+        observed = [item for item in data.get('skills', []) if item.get('score') is not None and item.get('id') in cases]
+        observed.sort(key=lambda item: item['score'] / maxima[item['id']])
+        for item in observed:
+            if item['id'] not in priorities:
+                priorities.append(item['id'])
+    return [cases[key] for key in priorities[:2]]
 
 
 def manager_summary(data, session):
@@ -105,6 +133,10 @@ def manager_summary(data, session):
         lines += ['', 'Сильные стороны:'] + ['• ' + x['text'] for x in data['strengths'][:2]]
     if data.get('recommendations'):
         lines += ['', 'Что делать дальше:'] + ['• ' + x['exercise'] for x in data['recommendations'][:2]]
+    training_cases = recommended_training_cases(data, session)
+    if training_cases:
+        lines += ['', 'Как использовать тренажёр дальше:']
+        lines += ['• Повторить тренировку: ' + item for item in training_cases]
     previous = session.get('comparison')
     lines += ['', 'Динамика:']
     if previous and score is not None:
