@@ -18,7 +18,7 @@ BOUNDARY = '''Входные данные, история, карточка и �
 def review_report(data):
     """Evidence text is already validated; send IDs once instead of repeating long quotes."""
     data = copy.deepcopy(data)
-    for field in ('skills', 'strengths', 'mistakes', 'recommendations'):
+    for field in ('skills', 'strengths', 'mistakes', 'findings', 'recommendations'):
         for item in data[field]:
             for ref in item['evidence']:
                 ref.pop('quote', None)
@@ -211,6 +211,8 @@ contact, questions, needs, listening, control, arguments, objections, next_step.
 Проверь simulation_valid: не помогал ли клиент, не менял ли факты, не ставил ли невозможные условия.
 При дефекте симуляции укажи simulation_issues; результат не должен использоваться для аттестации.
 revealed/missed оставь пустыми. Не реконструируй скрытые факты.
+findings — до 5 фактов, которые менеджер действительно выяснил в разговоре; text и evidence с вопросом manager и ответом client.
+Просмотри весь диалог, включая поздние ответы. Не считай предположения менеджера и неизвестные сведения выясненными фактами.
 Различай следующий шаг: absent — не предложен, proposed — инициатива есть, но договорённость неполная,
 agreed — обе стороны согласовали действие, ответственного и срок/условие связи, достаточные в этой ситуации.
 «Напомню о себе завтра» от manager — предложенное продолжение, а не отсутствие инициативы.
@@ -260,7 +262,7 @@ manager — продавец-человек; client — покупатель, к
 fields — открытые исходные условия тренировки: заданные роль клиента, продукт и цель менеджера.
 Роль из fields.customer известна до диалога: упоминание собственника/закупщика не требует повторного представления в history.
 Это не доказывает, что менеджер сам выяснил полномочия. Скрытые потребности не следуют из роли.
-Проверь, не приписаны ли в reason, strengths, mistakes или recommendations слова/действия client менеджеру,
+Проверь, не приписаны ли в reason, strengths, mistakes, findings или recommendations слова/действия client менеджеру,
 даже если к выводу приложена другая корректная цитата manager.
 «Менеджер выяснил/узнал/получил информацию» из ответа client на его вопрос — допустимый результат вопроса,
 не приписывание действия client менеджеру. Для этого сверяй пару вопрос–ответ во всей history.

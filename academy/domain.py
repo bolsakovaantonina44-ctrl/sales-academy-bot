@@ -74,7 +74,7 @@ EVAL_SCHEMA = obj(
     goal=choice('achieved', 'partial', 'not_achieved'),
     outcome={'type': 'integer', 'minimum': 0, 'maximum': 3},
     next_step=S, next_step_status=choice('absent', 'proposed', 'agreed'),
-    strengths=arr(OBSERVATION_SCHEMA), mistakes=arr(OBSERVATION_SCHEMA),
+    strengths=arr(OBSERVATION_SCHEMA), mistakes=arr(OBSERVATION_SCHEMA), findings=arr(OBSERVATION_SCHEMA),
     recommendations=arr(ACTION_SCHEMA),
     revealed=arr(S), missed=arr(S),
 )
@@ -100,7 +100,7 @@ EVAL_MODEL_SCHEMA = evidence_reference_schema(EVAL_SCHEMA)
 
 def attach_evidence(data, history):
     data = copy.deepcopy(data)
-    for field in ('skills', 'strengths', 'mistakes', 'recommendations'):
+    for field in ('skills', 'strengths', 'mistakes', 'findings', 'recommendations'):
         for item in data[field]:
             for ref in item['evidence']:
                 ident = ref['message_id']
@@ -319,8 +319,8 @@ def _check_evaluation(data, session):
         if score is not None and not item['evidence']:
             raise ValueError('Score without evidence')
         check_evidence(item['evidence'], require_manager=score is not None)
-    for field in ('strengths', 'mistakes'):
-        if len(data[field]) > 3:
+    for field in ('strengths', 'mistakes', 'findings'):
+        if len(data[field]) > (5 if field == 'findings' else 3):
             raise ValueError('Too many observations')
         for item in data[field]:
             if not item['text'].strip():
@@ -395,9 +395,7 @@ def render_report(data, session, include_hidden=False):
     if data.get('technical_partial'):
         lines += ['Недоступно: требуется сверка вопросов и ответов по сохранённому диалогу.']
     else:
-        lines += ['Ответы клиента в разговоре (факты необходимо отличать от интерпретаций):']
-        client_replies = [m['content'] for m in session['history'][1:] if m['role'] == 'assistant']
-        lines += ['• ' + t for t in client_replies[:5]] or ['Нет зафиксированных ответов.']
+        lines += ['• ' + item['text'] for item in data.get('findings', [])] or ['Подтверждённые результаты выявления не отмечены.']
     lines += ['', 'ЧТО ОСТАЛОСЬ СКРЫТЫМ']
     if include_hidden:
         facts = {f['id']: f['text'] for f in session['card']['facts']}

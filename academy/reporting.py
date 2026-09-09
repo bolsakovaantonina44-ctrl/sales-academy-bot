@@ -20,7 +20,7 @@ def fallback_data(session):
         skills.append(dict(id=key, score=None, reason='Баллы не выставлены. Реплики ниже — материал для ручной проверки, не подтверждённый вывод.', evidence=refs[:2]))
     return dict(simulation_valid=False, simulation_issues=['Автоматическая проверка недоступна; корректность симуляции не установлена.'],
                 skills=skills, goal='unavailable', outcome=None, next_step_status='unavailable', next_step=UNAVAILABLE,
-                strengths=[], mistakes=[], revealed=[], missed=[], technical_partial=True,
+                strengths=[], mistakes=[], findings=[], revealed=[], missed=[], technical_partial=True,
                 recommendations=[dict(skill_id=key, observation='Технический сбой: недостаток сотрудника не установлен.',
                     evidence=[], business_risk='Не установлен по непроверенному отчёту.', exercise=exercise,
                     example=example, success_check=check) for key, exercise, example, check in [

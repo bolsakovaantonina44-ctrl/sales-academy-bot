@@ -21,7 +21,7 @@ def evaluation(s):
     return dict(simulation_valid=True, simulation_issues=[],
         skills=[dict(id=k, score=m//2, reason='Основание по диалогу', evidence=[dict(message_id=mid, speaker='manager', quote=quote)]) for k,_,m in SKILLS],
         goal='partial', outcome=1, next_step='', next_step_status='absent',
-        strengths=[dict(text='Вопрос', evidence=evidence)],
+        findings=[], strengths=[dict(text='Вопрос', evidence=evidence)],
         mistakes=[dict(text='Не уточнил последствия', evidence=evidence)],
         recommendations=[dict(skill_id='needs', observation='Не уточнил последствия', evidence=evidence,
                               business_risk='Аргумент может не попасть в задачу', exercise='Задать вопрос о последствиях',

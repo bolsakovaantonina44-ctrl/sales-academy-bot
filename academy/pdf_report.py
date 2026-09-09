@@ -71,6 +71,8 @@ def render_pdf(session, audience='employee'):
     for title_text, field in [('Сильные стороны', 'strengths'), ('Ошибки и зоны развития', 'mistakes')]:
         story.append(p(title_text, heading))
         story += [p('• ' + item['text']) for item in data[field]] or [p('Подтверждённые выводы недоступны.' if data.get('technical_partial') else 'Дополнительных подтверждённых наблюдений нет.')]
+    story.append(p('Что удалось выяснить', heading))
+    story += [p('• ' + item['text']) for item in data.get('findings', [])] or [p('Подтверждённые результаты выявления недоступны.')]
     story.append(p('Рекомендации и следующий фокус', heading))
     for i, task in enumerate(data['recommendations'], 1):
         story.append(KeepTogether([p(f"Задание {i}. {task['exercise']}"), p('Пример: ' + task['example']), p('Проверка: ' + task['success_check'])]))
