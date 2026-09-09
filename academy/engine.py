@@ -195,8 +195,8 @@ class Engine:
                 s['started_at'] = datetime.now(timezone.utc).isoformat()
                 s['versions'].update(model=self.ai.model, evaluator=self.ai.eval_model,
                                      transcription=self.ai.transcribe_model)
-                s['history'] = [dict(role='assistant', content=s['card']['opening'])]
-                replies = [s['card']['opening']]
+                s['history'] = []
+                replies = ['Тренировка началась. Начните разговор первой репликой — как будто вы сами звоните или пишете клиенту.']
         elif cmd in LEVELS and s['phase'] in ('setup', 'ready'):
             s['fields']['difficulty'] = LEVELS[cmd]
             replies = [self.setup_summary(s) if s['phase']=='ready' else 'Уровень выбран. ' + QUESTIONS.get(s['awaiting'], QUESTIONS['product'])]
