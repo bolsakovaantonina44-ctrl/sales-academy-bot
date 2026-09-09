@@ -12,8 +12,10 @@ from academy.engine import Engine, deliver
 from academy.store import Store
 from academy.domain import normalize_command, upgrade_session, chunks, is_finish_command
 from academy.diagnostics import log_failure
+from academy.pacing import FOCUS_OBJECTIONS
 
 LOG = logging.getLogger('academy')
+FOCUS_LABELS = [v['label'] for v in FOCUS_OBJECTIONS.values()]
 
 CONTROL_COMMANDS = {
     'начать тренировку', 'новая тренировка', 'завершить тренировку', 'заверши тренировку',
@@ -21,8 +23,9 @@ CONTROL_COMMANDS = {
     'повторить обработку', 'пропустить эту реплику', 'обновить разбор', 'посмотреть разбор',
     'скачать результат', 'сформировать отчет', 'отчет сотруднику', 'отчет руководителю',
     'показать скрытый сценарий', 'мои тренировки', 'сессии пользователей',
+    'изменить имя', 'сменить имя',
     'легкий', 'лёгкий', 'средний', 'сложный', '1', '2', '3',
-}
+} | {normalize_command(label) for label in FOCUS_LABELS}
 
 
 def _is_control_text(text):
@@ -31,6 +34,11 @@ def _is_control_text(text):
         return False
     cmd = normalize_command(text)
     return is_finish_command(text) or cmd.startswith('/') or cmd in CONTROL_COMMANDS
+
+
+def _focus_rows():
+    labels = FOCUS_LABELS
+    return [[labels[0], labels[1]], [labels[2], labels[3]], [labels[4]]]
 
 
 def keyboard_rows(session, failed=False, admin=False):
@@ -59,7 +67,12 @@ def keyboard_rows(session, failed=False, admin=False):
             rows.append(['Сессии пользователей'])
         return rows
     if phase == 'ready':
-        rows = [['Начать тренировку'], ['Лёгкий', 'Средний', 'Сложный'], ['Новая тренировка']]
+        rows = []
+        if session.get('training_focus'):
+            rows.append(['Начать тренировку'])
+            rows.append(['1', '2', '3'])
+        rows.extend(_focus_rows())
+        rows.append(['Новая тренировка'])
         if admin:
             rows.append(['Сессии пользователей'])
         return rows
@@ -113,7 +126,6 @@ def _handle_lpr_gate(store, event):
     if event.get('kind') != 'text':
         return False
     text = event.get('text', '').strip()
-    # Hard safety boundary: commands/buttons are transport control, never dialogue content.
     if _is_control_text(text):
         return False
     s = store.current(event['user_id'])
@@ -253,13 +265,14 @@ def main():
             try:
                 s = upgrade_session(json.loads(row['payload']))
                 customer = s.get('fields', {}).get('customer', '') or 'сценарий не указан'
+                employee = s.get('employee', {}).get('name') or 'ФИО не указано'
                 score = None
                 if s.get('report_data'):
                     scored = [x.get('score') for x in s['report_data'].get('skills', []) if x.get('score') is not None]
                     if scored:
                         score = sum(scored)
                 suffix = f' · {score}/100' if score is not None else ''
-                lines.append(f"№{row['id']} · user {row['user_id']} · {s.get('phase','?')}{suffix}\n{customer[:100]}")
+                lines.append(f"№{row['id']} · {employee} · user {row['user_id']} · {s.get('phase','?')}{suffix}\n{customer[:100]}")
             except Exception:
                 lines.append(f"№{row['id']} · user {row['user_id']} · данные требуют проверки")
         lines += ['', 'Открыть разбор: /adminreport НОМЕР', 'Получить PDF: /adminpdf НОМЕР']
@@ -307,7 +320,7 @@ def main():
                 if not session:
                     send(message.chat.id, 'Сессия не найдена.')
                     return
-                header = f'Сессия №{sid} · Telegram ID {owner}\n'
+                header = f"Сессия №{sid} · {session.get('employee', {}).get('name') or 'ФИО не указано'} · Telegram ID {owner}\n"
                 report = session.get('report') or 'Разбор ещё не сформирован.'
                 for part in chunks(header + report):
                     send(message.chat.id, part)
@@ -329,7 +342,8 @@ def main():
                 for row in keyboard_rows(store.current(message.chat.id), bool(store.failed(message.chat.id)), True):
                     markup.row(*row)
                 bot.send_document(message.chat.id, document,
-                                  caption=f'Сессия №{sid} · Telegram ID {owner}', reply_markup=markup)
+                                  caption=f"Сессия №{sid} · {session.get('employee', {}).get('name') or 'ФИО не указано'} · Telegram ID {owner}",
+                                  reply_markup=markup)
                 return
 
         if kind == 'voice' and (message.voice.duration > 180 or (message.voice.file_size or 0) > 10*1024*1024):
