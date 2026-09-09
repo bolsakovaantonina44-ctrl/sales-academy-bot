@@ -6,12 +6,16 @@ from .domain import (session_empty, initial_state, normalize_command, is_finish_
                      render_report, partial_report, VERSION, RUBRIC_VERSION)
 from .diagnostics import log_failure
 from .scenarios import TEMPLATES, template, menu
-from .pacing import prepare_card
+from .pacing import prepare_card, FOCUS_OBJECTIONS
 from .reporting import fallback_data, total_score
 
 QUESTIONS = {'product': 'Что ты продаёшь?', 'customer': 'Кому продаёшь: роль клиента и тип компании?',
              'goal': 'Какого результата хочешь достичь в этом разговоре?'}
-LEVELS = {'лёгкий': 'easy', 'легкий': 'easy', 'средний': 'medium', 'сложный': 'hard'}
+LEVELS = {
+    '1': 'easy', '2': 'medium', '3': 'hard',
+    'лёгкий': 'easy', 'легкий': 'easy', 'средний': 'medium', 'сложный': 'hard',
+}
+FOCUS_BY_LABEL = {normalize_command(value['label']): key for key, value in FOCUS_OBJECTIONS.items()}
 SKIP = ('/skip', 'пропустить эту реплику')
 
 
@@ -34,7 +38,8 @@ class Engine:
             for previous in self.store.recent(event['user_id']):
                 if (previous['id'] != s['id'] and previous.get('report_status') == 'verified'
                     and previous.get('versions', {}).get('rubric') == RUBRIC_VERSION
-                    and previous.get('fields') == s['fields']):
+                    and previous.get('fields') == s['fields']
+                    and previous.get('training_focus') == s.get('training_focus')):
                     score = total_score(previous.get('report_data'))
                     if score is not None:
                         s['comparison'] = dict(session_id=previous['id'], score=score)
@@ -56,9 +61,15 @@ class Engine:
 
     def setup_summary(self, s):
         f = s['fields']
-        level = dict(easy='лёгкий', medium='средний', hard='сложный')[f['difficulty']]
-        return (f"Продукт: {f['product']}\nКлиент: {f['customer']}\nЦель: {f['goal']}\nУровень: {level}\n\n"
-                'Обычно тренировка занимает до 10 минут.\nНажми «Начать тренировку». Можно изменить уровень: «Лёгкий», «Средний» или «Сложный».')
+        difficulty = {'easy': '1', 'medium': '2', 'hard': '3'}[f['difficulty']]
+        focus = s.get('training_focus')
+        focus_label = FOCUS_OBJECTIONS.get(focus, {}).get('label', 'не выбрано')
+        base = (f"Продукт: {f['product']}\nКлиент: {f['customer']}\nЦель: {f['goal']}\n"
+                f"Что тренируем: {focus_label}\nСложность: {difficulty}\n\n"
+                'Обычно тренировка занимает до 10 минут.\n')
+        if not focus:
+            return base + 'Выберите одно возражение кнопкой — это будет главный навык текущей тренировки.'
+        return base + 'При необходимости выберите сложность 1, 2 или 3, затем нажмите «Начать тренировку».'
 
     def after_name_message(self, s):
         if s['phase'] == 'ready':
@@ -215,24 +226,30 @@ class Engine:
                 if state['close'] != 'continue':
                     s['phase'] = 'closed'
                     replies += ['Разговор закончен. Нажми «Завершить тренировку» — получишь разбор.']
+        elif s['phase'] == 'ready' and cmd in FOCUS_BY_LABEL:
+            s['training_focus'] = FOCUS_BY_LABEL[cmd]
+            replies = [self.setup_summary(s)]
+        elif s['phase'] == 'ready' and cmd in LEVELS:
+            s['fields']['difficulty'] = LEVELS[cmd]
+            replies = [self.setup_summary(s)]
         elif s['phase'] == 'ready' and cmd in ('начать тренировку', '/begin'):
-            if user not in self.admin_ids and self.store.attempts(user) >= self.limit:
+            if not s.get('training_focus'):
+                replies = ['Сначала выберите, какое возражение тренируем.']
+            elif user not in self.admin_ids and self.store.attempts(user) >= self.limit:
                 replies = [f'Использованы все {self.limit} бесплатные тренировки. Сохранённые разборы доступны в «Мои тренировки».\n\n' + s['knowledge']['offer']]
             else:
                 s['card'] = s['card'] or self.ai.card({**s['fields'], 'situation': s['setup'],
                     'corporate_knowledge': {k: s['knowledge'][k] for k in ('product_knowledge', 'company_rules')}})
-                s['card'] = prepare_card(s['card'], s['fields']['difficulty'])
+                s['card'] = prepare_card(s['card'], s['fields']['difficulty'], s.get('training_focus'))
                 s['state'] = initial_state()
                 s['phase'] = 'active'
                 s['started_at'] = datetime.now(timezone.utc).isoformat()
                 s['versions'].update(model=self.ai.model, evaluator=self.ai.eval_model,
                                      transcription=self.ai.transcribe_model)
                 s['history'] = []
-                replies = ['Тренировка началась. Начните разговор первой репликой — как будто вы сами звоните или пишете клиенту.']
-        elif cmd in LEVELS and s['phase'] in ('setup', 'ready'):
-            s['fields']['difficulty'] = LEVELS[cmd]
-            replies = [self.setup_summary(s) if s['phase']=='ready' else 'Уровень выбран. ' + QUESTIONS.get(s['awaiting'], QUESTIONS['product'])]
-        elif cmd in TEMPLATES and s['phase'] in ('setup', 'ready'):
+                focus_label = FOCUS_OBJECTIONS[s['training_focus']]['label']
+                replies = [f'Тренировка началась. Фокус: «{focus_label}». Начните разговор первой репликой — как будто вы сами звоните или пишете клиенту.']
+        elif cmd in TEMPLATES and s['phase'] in ('setup', 'ready') and s['phase'] != 'ready':
             t = template(cmd)
             s['template'], s['card'] = cmd, t['card']
             s['source'] = t.get('source', 'company' if s['knowledge']['scenarios'] else 'demo')
