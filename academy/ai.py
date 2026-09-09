@@ -250,8 +250,8 @@ prior_observations — проверенные замечания прошлых 
                    'history': [{'message_id': i+1,
                                 'speaker': 'manager' if m['role'] == 'user' else 'client',
                                 'content': m['content']} for i, m in enumerate(session['history'])]}
-        # One automatic repair of an invalid report; never replay or charge a conversation turn.
-        for attempt in range(2):
+        # Long reports can expose more than one independent attribution issue. Allow two bounded repairs.
+        for attempt in range(3):
             try:
                 data = self.request('evaluation', instructions, payload,
                                     EVAL_MODEL_SCHEMA, self.eval_model, max_output_tokens=10000)
@@ -293,7 +293,8 @@ passed=false только при конкретной ошибке; в issues к
                 return check_evaluation(data, session)
             except EvaluationError as exc:
                 LOG.warning('Evaluation rejected attempt=%s reason=%s', attempt+1, str(exc))
-                if attempt:
+                if attempt == 2:
                     raise
                 payload['validation_feedback'] = str(exc)
-                instructions += '\nПредыдущий разбор не прошёл проверку. Исправь rejected_report по исходной истории и конкретным validation_feedback/review_feedback. Измени только поля с конкретным замечанием и зависимые от них выводы. Остальные поля rejected_report скопируй без переработки. Не повторяй отклонённые утверждения.'
+                if payload.get('rejected_report'):
+                    instructions += '\nПредыдущий разбор не прошёл проверку. Исправь rejected_report по исходной истории и конкретным validation_feedback/review_feedback. Измени только поля с конкретным замечанием и зависимые от них выводы. Остальные поля rejected_report скопируй без переработки. Не повторяй отклонённые утверждения.'
