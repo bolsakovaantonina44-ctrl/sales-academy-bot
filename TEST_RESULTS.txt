@@ -1,6 +1,30 @@
-2026-09-07
-Command: python -m unittest discover -s tests -v
-Ran 31 tests in 0.510s
-OK
-Python compileall: passed.
-External APIs replaced by test doubles. No live Telegram/OpenAI/Railway deployment test performed.
+2026-09-09 — release candidate 74deed3ec93ec63a04b299b4a19706eb4731927b
+
+Local verification:
+- PYTHONPATH=.:tests python -m unittest discover -s tests -q
+- Ran 65 tests: OK
+- python -m py_compile bot.py academy/*.py tests/*.py: OK
+- git diff --check origin/main: OK
+
+Railway production pre-deploy verification with live OpenAI APIs:
+- SMOKE_MVP_PASS (text, voice, persistence, completed report)
+- SMOKE_EVALUATION_PASS (structured evaluator and attribution review)
+- SMOKE_LONG_EVALUATION_PASS turns=24
+
+Deployment:
+- project: captivating-amazement
+- service: sales-academy-bot-v2
+- deployment: 696463ee-48ae-496b-8e66-cd454a4de06d
+- status: SUCCESS
+- database: /data/academy.sqlite3 on mounted Volume
+- Telegram identity: @Academy_sales_trainer_bot; webhook disabled; pending updates 0
+- old sales-academy-bot and sales-academy-demo-v4 services: no active deployment
+
+Verified by automated transport tests, not by a human Telegram client:
+- report text is not truncated mid-word;
+- employee PDF is queued automatically;
+- PDF bytes are generated and routed through Telegram send_document;
+- a focused training cannot end before the selected objection is presented.
+
+Remaining manual acceptance: one full production conversation from a Telegram client,
+visual inspection of the received PDF, and product-owner calibration of scoring quality.
