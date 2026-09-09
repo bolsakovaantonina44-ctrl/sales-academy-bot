@@ -60,15 +60,45 @@ class Engine:
         return (f"Продукт: {f['product']}\nКлиент: {f['customer']}\nЦель: {f['goal']}\nУровень: {level}\n\n"
                 'Обычно тренировка занимает до 10 минут.\nНажми «Начать тренировку». Можно изменить уровень: «Лёгкий», «Средний» или «Сложный».')
 
+    def after_name_message(self, s):
+        if s['phase'] == 'ready':
+            return 'Имя сохранено.\n\n' + self.setup_summary(s)
+        if s['phase'] == 'active':
+            return 'Имя сохранено. Тренировка продолжается — отправьте следующую реплику клиенту.'
+        if s['phase'] == 'closed':
+            return 'Имя сохранено. Нажмите «Завершить тренировку», чтобы получить разбор.'
+        if s['phase'] == 'completed':
+            return 'Имя сохранено. Оно будет указано в отчётах по этой и следующим тренировкам.'
+        return ('Спасибо, имя сохранено.\n\nПривет! Это Академия продаж. Клиент не подсказывает во время разговора; '
+                'разбор — после завершения. Можно писать или отправлять голосовые до 3 минут. '
+                'Обычно тренировка занимает до 10 минут.\n\n' + menu())
+
     def handle(self, event):
         user = event['user_id']
         text = event['text'].strip()
         cmd = normalize_command(text)
         s = self.store.current(user)
-        s.setdefault('employee', {'id': user, 'name': event.get('employee_name', '')})
+        employee = s.setdefault('employee', {'id': user, 'name': ''})
+        employee['id'] = user
+        employee.setdefault('name', '')
         replies, charge = [], False
         failed = self.store.failed(user)
-        if cmd in ('/retry', 'повторить обработку'):
+
+        if cmd in ('/name', 'изменить имя', 'сменить имя'):
+            s['awaiting_employee_name'] = True
+            replies = ['Напишите имя и фамилию сотрудника. Они будут указаны в отчётах.']
+        elif s.get('awaiting_employee_name'):
+            name = ' '.join(text.split())
+            if text.startswith('/') or len(name) < 2 or len(name) > 80:
+                replies = ['Напишите имя и фамилию сотрудника обычным текстом, до 80 символов.']
+            else:
+                s['employee'] = {'id': user, 'name': name}
+                s.pop('awaiting_employee_name', None)
+                replies = [self.after_name_message(s)]
+        elif not employee.get('name'):
+            s['awaiting_employee_name'] = True
+            replies = ['Перед первой тренировкой напишите, пожалуйста, имя и фамилию сотрудника. Они будут указаны в отчётах.']
+        elif cmd in ('/retry', 'повторить обработку'):
             failed = self.store.failed(user)
             if failed and failed['attempts'] < 2:
                 restored = self.store.retry_event(event, failed)
@@ -83,7 +113,9 @@ class Engine:
             replies = ['Реплика не обработана. Можно повторить один раз, пропустить её или завершить тренировку.']
         elif cmd in ('/new', 'новая тренировка'):
             self.store.discard_failed(user)
+            saved_employee = copy.deepcopy(s.get('employee', {'id': user, 'name': ''}))
             s = session_empty()
+            s['employee'] = saved_employee
             replies = [menu()]
         elif cmd in ('/history', 'мои тренировки'):
             recent = [x for x in self.store.recent(user) if x['card']]
@@ -178,7 +210,7 @@ class Engine:
                 s['history'] += [dict(role='user', content=text), dict(role='assistant', content=answer)]
                 s['state'] = state
                 s.setdefault('turn_events', []).append(plan)
-                charge = True  # Charged once, atomically, only after first successful manager turn.
+                charge = True
                 replies = [answer]
                 if state['close'] != 'continue':
                     s['phase'] = 'closed'
@@ -208,7 +240,6 @@ class Engine:
             s['phase'], s['awaiting'] = 'ready', None
             replies = [self.setup_summary(s)]
         else:
-            # When awaiting a field, store the direct answer without asking the AI to decide readiness again.
             if s['awaiting']:
                 if len(text) < 2:
                     replies = [QUESTIONS[s['awaiting']]]
