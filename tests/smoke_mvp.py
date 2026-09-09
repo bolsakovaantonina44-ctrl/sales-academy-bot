@@ -13,13 +13,15 @@ from academy.ai import AI
 from academy.engine import Engine, deliver
 from academy.store import Store
 from academy.diagnostics import log_failure
-from bot import worker
+from bot import worker, _is_control_text
 from smoke_evaluation import main as evaluation_smoke
 from smoke_long_evaluation import main as long_evaluation_smoke
 
 
 def main():
     model=os.getenv('OPENAI_MODEL','gpt-5.6-luna')
+    if not _is_control_text('Завершить тренировку') or not _is_control_text('Дорого') or not _is_control_text('2'):
+        raise RuntimeError('System/focus command routing unsafe')
     with tempfile.TemporaryDirectory() as temp, OpenAI(api_key=os.environ['OPENAI_API_KEY'],timeout=90,max_retries=1) as client:
         ai=AI(client,model,os.getenv('OPENAI_TRANSCRIBE_MODEL','gpt-4o-mini-transcribe'),os.getenv('OPENAI_EVAL_MODEL',model))
         store=Store(Path(temp)/'smoke.sqlite3'); engine=Engine(store,ai);seq=0
@@ -39,7 +41,14 @@ def main():
         if s.get('employee',{}).get('name')!='Тестовый Менеджер': raise RuntimeError('Manager name not saved')
         s=send('Продаю услугу бухгалтерского сопровождения небольшим компаниям. Разговариваю с собственником, это первый холодный звонок. Цель — согласовать короткую встречу для обсуждения задач бухгалтерии.')
         if s['phase']!='ready':raise RuntimeError('Custom setup failed')
-        s=send('Начать тренировку'); before=list(s['history']); s=send('Начать тренировку')
+        s=send('Дорого')
+        if s.get('training_focus')!='price': raise RuntimeError('Training focus not saved')
+        s=send('2')
+        if s['fields']['difficulty']!='medium': raise RuntimeError('Numeric difficulty not saved')
+        s=send('Начать тренировку')
+        if not s.get('card') or s['card']['barriers'][0]['text']!='Дорого.':
+            raise RuntimeError('Focused objection not injected')
+        before=list(s['history']); s=send('Начать тренировку')
         if s['history'] != before: raise RuntimeError('Duplicate begin entered dialogue')
         identity=json.dumps(s['card'],sort_keys=True);scenario=s['scenario_id'];product=s['fields']['product']
         for text in ('Как к вам обращаться?','Какая у вас должность?',
@@ -72,6 +81,7 @@ def main():
         s=send('Завершить тренировку')
         if s['phase']!='completed' or s.get('report_status')!='verified':raise RuntimeError('Verified report unavailable')
         if s.get('employee',{}).get('name')!='Тестовый Менеджер': raise RuntimeError('Manager name lost before report')
+        if s.get('training_focus')!='price': raise RuntimeError('Training focus lost before report')
         if Store(store.path).current(9001)!=s or Store(store.path).attempts(9001)!=1:raise RuntimeError('Persistence failed')
         print('SMOKE_MVP_PASS',flush=True)
     evaluation_smoke()
