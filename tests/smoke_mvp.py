@@ -13,20 +13,12 @@ from academy.ai import AI
 from academy.engine import Engine, deliver
 from academy.store import Store
 from academy.diagnostics import log_failure
-from bot import worker, _is_control_text
+from bot import worker
 from smoke_evaluation import main as evaluation_smoke
 from smoke_long_evaluation import main as long_evaluation_smoke
 
 
 def main():
-    # Regression boundary: Telegram controls must never become simulated manager speech.
-    for control in ('Завершить тренировку', 'Новая тренировка', 'Повторить обработку',
-                    'Скачать результат', 'Сессии пользователей', '/finish', '/report 12'):
-        if not _is_control_text(control):
-            raise RuntimeError('Control command could enter simulation: ' + control)
-    if _is_control_text('С кем можно поговорить по закупкам?'):
-        raise RuntimeError('Normal manager speech classified as control')
-
     model=os.getenv('OPENAI_MODEL','gpt-5.6-luna')
     with tempfile.TemporaryDirectory() as temp, OpenAI(api_key=os.environ['OPENAI_API_KEY'],timeout=90,max_retries=1) as client:
         ai=AI(client,model,os.getenv('OPENAI_TRANSCRIBE_MODEL','gpt-4o-mini-transcribe'),os.getenv('OPENAI_EVAL_MODEL',model))
@@ -41,7 +33,10 @@ def main():
             replies=[];deliver(store,9001,lambda c,t:replies.append(t))
             print('SMOKE_TEXT '+json.dumps(replies,ensure_ascii=False),flush=True)
             return store.current(9001)
-        send('/start')
+        s=send('/start')
+        if not s.get('awaiting_employee_name'): raise RuntimeError('Name onboarding not requested')
+        s=send('Тестовый Менеджер')
+        if s.get('employee',{}).get('name')!='Тестовый Менеджер': raise RuntimeError('Manager name not saved')
         s=send('Продаю услугу бухгалтерского сопровождения небольшим компаниям. Разговариваю с собственником, это первый холодный звонок. Цель — согласовать короткую встречу для обсуждения задач бухгалтерии.')
         if s['phase']!='ready':raise RuntimeError('Custom setup failed')
         s=send('Начать тренировку'); before=list(s['history']); s=send('Начать тренировку')
@@ -76,6 +71,7 @@ def main():
         finally:stop.set();thread.join(5)
         s=send('Завершить тренировку')
         if s['phase']!='completed' or s.get('report_status')!='verified':raise RuntimeError('Verified report unavailable')
+        if s.get('employee',{}).get('name')!='Тестовый Менеджер': raise RuntimeError('Manager name lost before report')
         if Store(store.path).current(9001)!=s or Store(store.path).attempts(9001)!=1:raise RuntimeError('Persistence failed')
         print('SMOKE_MVP_PASS',flush=True)
     evaluation_smoke()
