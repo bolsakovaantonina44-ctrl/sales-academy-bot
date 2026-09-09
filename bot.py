@@ -37,13 +37,20 @@ def keyboard_rows(session, failed=False, admin=False):
 
 def receive_text(store, event_key, user_id, chat_id, kind, text, send):
     accepted = store.enqueue(event_key, user_id, chat_id, kind, text)
-    if accepted and kind == 'text' and normalize_command(text) in ('начать тренировку', '/begin'):
-        # Receipt is independent of the ordered worker and slow card/model requests.
-        try:
-            send(chat_id, 'Запускаю тренировку…' if store.current(user_id)['phase'] == 'ready'
-                 else 'Запрос принят. Проверяю состояние тренировки…')
-        except Exception:
-            pass  # Input remains durable even if the cosmetic acknowledgement fails.
+    if accepted and kind == 'text':
+        cmd = normalize_command(text)
+        if cmd in ('начать тренировку', '/begin'):
+            # Receipt is independent of the ordered worker and slow card/model requests.
+            try:
+                send(chat_id, 'Запускаю тренировку…' if store.current(user_id)['phase'] == 'ready'
+                     else 'Запрос принят. Проверяю состояние тренировки…')
+            except Exception:
+                pass  # Input remains durable even if the cosmetic acknowledgement fails.
+        elif cmd in ('/pdf', 'сформировать отчет', 'скачать результат', 'отчет сотруднику', 'отчет руководителю'):
+            try:
+                send(chat_id, 'Готовлю файл. Это может занять около 1 минуты…')
+            except Exception:
+                pass  # File request remains durable even if the acknowledgement fails.
     return accepted
 
 
