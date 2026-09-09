@@ -1,10 +1,13 @@
 """Application service. No transport imports or network side effects."""
 import copy
 import json
+from datetime import datetime, timezone
 from .domain import (session_empty, initial_state, normalize_command, is_finish_command,
                      render_report, partial_report, VERSION, RUBRIC_VERSION)
 from .diagnostics import log_failure
 from .scenarios import TEMPLATES, template, menu
+from .pacing import prepare_card
+from .reporting import fallback_data, total_score
 
 QUESTIONS = {'product': 'Что ты продаёшь?', 'customer': 'Кому продаёшь: роль клиента и тип компании?',
              'goal': 'Какого результата хочешь достичь в этом разговоре?'}
@@ -13,23 +16,36 @@ SKIP = ('/skip', 'пропустить эту реплику')
 
 
 class Engine:
-    def __init__(self, store, ai, limit=3, admin_ids=(), max_turns=40):
+    def __init__(self, store, ai, limit=3, admin_ids=(), max_turns=18):
         self.store, self.ai, self.limit = store, ai, limit
         self.admin_ids, self.max_turns = set(admin_ids), max_turns
 
     def make_report(self, s, event):
+        s.pop('comparison', None)
+        s['report_public_only'] = True
+        s.setdefault('completed_at', datetime.now(timezone.utc).isoformat())
+        s['employee'] = dict(id=event['user_id'], name=s.get('employee', {}).get('name', ''))
         s['versions'].update(app=VERSION, rubric=RUBRIC_VERSION, evaluator=self.ai.eval_model)
         try:
             s['prior_observations'] = [dict(session_id=p['id'], mistakes=p['report_data'].get('mistakes', []))
                                       for p in self.store.recent(event['user_id'])
                                       if p['id'] != s['id'] and p.get('report_status') == 'verified'
-                                      and p.get('report_data')][:3]
+                                      and p.get('report_data') and p.get('report_public_only')][:3]
+            for previous in self.store.recent(event['user_id']):
+                if (previous['id'] != s['id'] and previous.get('report_status') == 'verified'
+                    and previous.get('versions', {}).get('rubric') == RUBRIC_VERSION
+                    and previous.get('fields') == s['fields']):
+                    score = total_score(previous.get('report_data'))
+                    if score is not None:
+                        s['comparison'] = dict(session_id=previous['id'], score=score)
+                        break
             data = self.ai.evaluate(s)
             s['report_data'], s['report'] = data, render_report(data, s)
             s['report_status'] = 'verified'
         except Exception as exc:
             log_failure(event, s, 'evaluation', exc)
-            s['report_data'], s['report'] = None, partial_report(s)
+            s['report_data'] = fallback_data(s)
+            s['report'] = render_report(s['report_data'], s)
             s['report_status'] = 'technical_partial'
 
     def omit_failed(self, s, event, failed):
@@ -42,13 +58,14 @@ class Engine:
         f = s['fields']
         level = dict(easy='лёгкий', medium='средний', hard='сложный')[f['difficulty']]
         return (f"Продукт: {f['product']}\nКлиент: {f['customer']}\nЦель: {f['goal']}\nУровень: {level}\n\n"
-                'Нажми «Начать тренировку». Можно изменить уровень: «Лёгкий», «Средний» или «Сложный».')
+                'Обычно тренировка занимает до 10 минут.\nНажми «Начать тренировку». Можно изменить уровень: «Лёгкий», «Средний» или «Сложный».')
 
     def handle(self, event):
         user = event['user_id']
         text = event['text'].strip()
         cmd = normalize_command(text)
         s = self.store.current(user)
+        s.setdefault('employee', {'id': user, 'name': event.get('employee_name', '')})
         replies, charge = [], False
         failed = self.store.failed(user)
         if cmd in ('/retry', 'повторить обработку'):
@@ -73,6 +90,16 @@ class Engine:
             replies = ['ПОСЛЕДНИЕ ТРЕНИРОВКИ\n' + ('\n'.join(
                 f"№{x['id']}: {x['fields']['customer']} — {x['phase']}" for x in recent) or 'Пока нет тренировок.') +
                 '\n\nДля сохранённого разбора: /report НОМЕР']
+        elif cmd in ('/pdf', 'сформировать отчет', 'скачать результат', 'отчет сотруднику', 'отчет руководителю'):
+            if s['phase'] != 'completed' or not s.get('report'):
+                replies = ['Сначала завершите тренировку и получите разбор.']
+            elif cmd == 'отчет руководителю' and user not in self.admin_ids:
+                replies = ['Расширенный отчёт доступен администратору. Для пересылки доступно «Скачать результат».']
+            else:
+                if not s.get('report_public_only'):
+                    self.make_report(s, event)
+                audience = 'supervisor' if cmd == 'отчет руководителю' else 'employee'
+                replies = [f"__academy_pdf__:{s['id']}:{audience}"]
         elif cmd.startswith('/report ') or cmd in ('/report', 'посмотреть разбор'):
             target = s
             if cmd.startswith('/report '):
@@ -94,7 +121,9 @@ class Engine:
                 self.make_report(s, event)
                 replies = [s['report'], 'Разбор обновлён. Новая тренировка не списана.']
         elif cmd in ('/scenario', 'показать скрытый сценарий'):
-            if s['phase'] != 'completed':
+            if user not in self.admin_ids:
+                replies = ['Скрытый сценарий доступен только администратору.']
+            elif s['phase'] != 'completed':
                 replies = ['Скрытый сценарий доступен после завершения и разбора тренировки.']
             else:
                 card = s['card']
@@ -116,7 +145,7 @@ class Engine:
                 replies = ['Разговор закончен. Нажми «Завершить тренировку», чтобы получить разбор.']
             else:
                 replies = ['Привет! Это Академия продаж. Клиент не подсказывает во время разговора; разбор — после завершения. '
-                           'Можно писать или отправлять голосовые до 3 минут.\n\n' + menu()]
+                           'Можно писать или отправлять голосовые до 3 минут. Обычно тренировка занимает до 10 минут.\n\n' + menu()]
         elif is_finish_command(text):
             self.omit_failed(s, event, failed)
             if s['phase'] == 'completed' and s['report']:
@@ -130,13 +159,16 @@ class Engine:
             else:
                 self.make_report(s, event)
                 s['phase'] = 'completed'
-                replies = [s['report'], 'Разбор сохранён. Доступны «Показать скрытый сценарий» и «Новая тренировка».']
+                replies = [s['report'], 'Разбор сохранён. Доступны «Посмотреть разбор», «Скачать результат» и «Новая тренировка».']
                 if user not in self.admin_ids and self.store.attempts(user) >= self.limit:
                     replies.append(f'Вы завершили доступные {self.limit} тренировки.\n\n' + s['knowledge']['offer'])
         elif s['phase'] == 'completed':
             replies = ['Эта тренировка завершена. Нажми «Новая тренировка» или «Посмотреть разбор».']
         elif s['phase'] == 'closed':
             replies = ['Клиент закончил разговор. Нажми «Завершить тренировку» для разбора.']
+        elif cmd in ('начать тренировку', '/begin') and s['phase'] != 'ready':
+            replies = ['Тренировка уже запущена. Отправьте реплику клиенту.' if s['phase'] == 'active'
+                       else 'Сначала выберите новую ситуацию для тренировки.']
         elif s['phase'] == 'active':
             if s['state']['turns'] >= self.max_turns:
                 s['phase'] = 'closed'
@@ -157,8 +189,10 @@ class Engine:
             else:
                 s['card'] = s['card'] or self.ai.card({**s['fields'], 'situation': s['setup'],
                     'corporate_knowledge': {k: s['knowledge'][k] for k in ('product_knowledge', 'company_rules')}})
+                s['card'] = prepare_card(s['card'], s['fields']['difficulty'])
                 s['state'] = initial_state()
                 s['phase'] = 'active'
+                s['started_at'] = datetime.now(timezone.utc).isoformat()
                 s['versions'].update(model=self.ai.model, evaluator=self.ai.eval_model,
                                      transcription=self.ai.transcribe_model)
                 s['history'] = [dict(role='assistant', content=s['card']['opening'])]

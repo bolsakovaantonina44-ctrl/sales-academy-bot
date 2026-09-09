@@ -13,10 +13,38 @@ from academy.domain import normalize_command
 from academy.diagnostics import log_failure
 
 LOG = logging.getLogger('academy')
-BUTTONS = [['1', '2', '3'], ['Начать тренировку', 'Завершить тренировку'],
-           ['Лёгкий', 'Средний', 'Сложный'], ['Повторить обработку', 'Посмотреть разбор'],
-           ['Показать скрытый сценарий', 'Мои тренировки'], ['Обновить разбор', 'Новая тренировка'],
-           ['Пропустить эту реплику']]
+
+
+def keyboard_rows(session, failed=False, admin=False):
+    phase = session['phase']
+    if failed:
+        return [['Повторить обработку', 'Пропустить эту реплику'], ['Завершить тренировку']]
+    if phase == 'active':
+        return [['Завершить тренировку']]
+    if phase == 'closed':
+        return [['Завершить тренировку', 'Новая тренировка']]
+    if phase == 'completed':
+        rows = [['Посмотреть разбор', 'Скачать результат'], ['Новая тренировка', 'Мои тренировки']]
+        if session.get('report_status') == 'technical_partial':
+            rows.append(['Обновить разбор'])
+        if admin:
+            rows.append(['Отчёт руководителю', 'Показать скрытый сценарий'])
+        return rows
+    if phase == 'ready':
+        return [['Начать тренировку'], ['Лёгкий', 'Средний', 'Сложный'], ['Новая тренировка']]
+    return [['1', '2', '3'], ['Мои тренировки']]
+
+
+def receive_text(store, event_key, user_id, chat_id, kind, text, send):
+    accepted = store.enqueue(event_key, user_id, chat_id, kind, text)
+    if accepted and kind == 'text' and normalize_command(text) in ('начать тренировку', '/begin'):
+        # Receipt is independent of the ordered worker and slow card/model requests.
+        try:
+            send(chat_id, 'Запускаю тренировку…' if store.current(user_id)['phase'] == 'ready'
+                 else 'Запрос принят. Проверяю состояние тренировки…')
+        except Exception:
+            pass  # Input remains durable even if the cosmetic acknowledgement fails.
+    return accepted
 
 
 def worker(store, engine, ai, bot, stop, send):
@@ -120,12 +148,24 @@ def main():
              identity.username, bool(webhook.url), webhook.pending_update_count)
     admins = [int(v.strip()) for v in os.getenv('ADMIN_IDS', '').split(',') if v.strip()]
     engine = Engine(store, ai, limit=int(os.getenv('FREE_TRAININGS', '3')), admin_ids=admins)
-    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
-    for row in BUTTONS:
-        markup.row(*row)
-
     def send(chat_id, text):
-        bot.send_message(chat_id, text, reply_markup=markup)
+        markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+        for row in keyboard_rows(store.current(chat_id), bool(store.failed(chat_id)), chat_id in admins):
+            markup.row(*row)
+        if text.startswith('__academy_pdf__:'):
+            _, sid, audience = text.split(':')
+            if audience == 'supervisor' and chat_id not in admins:
+                bot.send_message(chat_id, 'Расширенный отчёт доступен только администратору.', reply_markup=markup)
+                return
+            session = store.session_for_user(chat_id, int(sid))
+            if not session:
+                bot.send_message(chat_id, 'Сохранённый результат не найден.', reply_markup=markup)
+                return
+            from academy.pdf_report import render_pdf
+            document = render_pdf(session, audience)
+            bot.send_document(chat_id, document, caption='Результат тренировки · Академия продаж', reply_markup=markup)
+        else:
+            bot.send_message(chat_id, text, reply_markup=markup)
 
     @bot.message_handler(content_types=['text', 'voice'])
     def incoming(message):
@@ -139,7 +179,7 @@ def main():
         if kind == 'text' and (not text or len(text) > 5000):
             send(message.chat.id, 'Отправь реплику до 5000 символов.')
             return
-        store.enqueue(f'{message.chat.id}:{message.message_id}', message.from_user.id, message.chat.id, kind, text)
+        receive_text(store, f'{message.chat.id}:{message.message_id}', message.from_user.id, message.chat.id, kind, text, send)
 
     stop = threading.Event()
     thread = threading.Thread(target=worker, args=(store, engine, ai, bot, stop, send), daemon=True)

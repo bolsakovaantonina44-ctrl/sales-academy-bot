@@ -15,6 +15,7 @@ from academy.store import Store
 from academy.diagnostics import log_failure
 from bot import worker
 from smoke_evaluation import main as evaluation_smoke
+from smoke_long_evaluation import main as long_evaluation_smoke
 
 
 def main():
@@ -35,7 +36,9 @@ def main():
         send('/start')
         s=send('Продаю услугу бухгалтерского сопровождения небольшим компаниям. Разговариваю с собственником, это первый холодный звонок. Цель — согласовать короткую встречу для обсуждения задач бухгалтерии.')
         if s['phase']!='ready':raise RuntimeError('Custom setup failed')
-        s=send('Начать тренировку'); identity=json.dumps(s['card'],sort_keys=True);scenario=s['scenario_id'];product=s['fields']['product']
+        s=send('Начать тренировку'); before=list(s['history']); s=send('Начать тренировку')
+        if s['history'] != before: raise RuntimeError('Duplicate begin entered dialogue')
+        identity=json.dumps(s['card'],sort_keys=True);scenario=s['scenario_id'];product=s['fields']['product']
         for text in ('Как к вам обращаться?','Какая у вас должность?',
                      'Какие задачи по бухгалтерии вам сейчас приходится решать лично?',
                      'Что для вас важнее при выборе подрядчика?',
@@ -68,6 +71,7 @@ def main():
         if Store(store.path).current(9001)!=s or Store(store.path).attempts(9001)!=1:raise RuntimeError('Persistence failed')
         print('SMOKE_MVP_PASS',flush=True)
     evaluation_smoke()
+    long_evaluation_smoke()
 
 
 if __name__=='__main__':

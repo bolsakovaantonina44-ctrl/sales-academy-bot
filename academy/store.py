@@ -70,6 +70,11 @@ class Store:
                              (user_id,)).fetchone()
             return upgrade_session(json.loads(row[0])) if row else session_empty()
 
+    def session_for_user(self, user_id, session_id):
+        with self.db() as db:
+            row = db.execute('SELECT payload FROM sessions WHERE id=? AND user_id=?', (session_id, user_id)).fetchone()
+        return upgrade_session(json.loads(row[0])) if row else None
+
     def attempts(self, user_id):
         with self.db() as db:
             return db.execute('SELECT COALESCE(SUM(counted),0) FROM sessions WHERE user_id=?', (user_id,)).fetchone()[0]

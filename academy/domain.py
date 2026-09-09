@@ -54,7 +54,7 @@ PLAN_SCHEMA = obj(
                           reopen_reason=choice('none', 'new_fact', 'contradiction', 'unanswered', 'critical'))),
     focus_issue_id=S,
     action=choice('question', 'relevant_argument', 'objection_work', 'next_step',
-                  'monologue', 'pressure', 'ignored_answer', 'other'),
+                  'monologue', 'pressure', 'ignored_answer', 'reflection', 'other'),
     reveal_ids=arr(S), resolved_ids=arr(S),
     trust_delta={'type': 'integer', 'minimum': -1, 'maximum': 1},
     interest_delta={'type': 'integer', 'minimum': -1, 'maximum': 1},
@@ -344,23 +344,25 @@ def _check_evaluation(data, session):
     return data
 
 
-def render_report(data, session):
+def render_report(data, session, include_hidden=False):
     items = {v['id']: v for v in data['skills']}
     earned = sum(x['score'] or 0 for x in items.values())
     maximum = sum(m for k, _, m in SKILLS if items[k]['score'] is not None)
     lines = ['РЕЗУЛЬТАТ ЭТОЙ ТРЕНИРОВКИ', 'Это учебная диагностика, не итоговая аттестация.']
     if session.get('technical_errors'):
         lines += [f"Из-за технических ошибок не учтено реплик: {session['technical_errors']}. За них баллы не снижены."]
-    if not data['simulation_valid']:
+    if data.get('technical_partial'):
+        lines += ['Автоматическую оценку сейчас не удалось проверить. Баллы не выставлены; это не оценка 0/100.', 'Навыки: недоступны /100']
+    elif not data['simulation_valid']:
         lines += ['Симуляция требует проверки. Итоговый балл не выставлен.']
     elif maximum == 100:
         lines += [f'Навыки: {earned}/100']
     else:
         lines += [f'По наблюдаемым навыкам: {earned}/{maximum}.',
                   'Общий балл из 100 не рассчитан: по части навыков недостаточно данных.']
-    goal = dict(achieved='достигнута', partial='частично достигнута', not_achieved='не достигнута')
-    step_status = dict(absent='не предложен', proposed='предложен, но не согласован полностью', agreed='согласован')
-    lines += [f"Цель: {goal[data['goal']]}", f"Коммерческий результат: {data['outcome']}/3 (отдельно)",
+    goal = dict(achieved='достигнута', partial='частично достигнута', not_achieved='не достигнута', unavailable='недоступна: требуется проверка')
+    step_status = dict(absent='не предложен', proposed='предложен, но не согласован полностью', agreed='согласован', unavailable='недоступен: требуется проверка')
+    lines += [f"Цель: {goal[data['goal']]}", ('Коммерческий результат: недоступен (отдельно)' if data['outcome'] is None else f"Коммерческий результат: {data['outcome']}/3 (отдельно)"),
               'Статус следующего шага: ' + step_status[data['next_step_status']],
               'Следующий шаг: ' + (data['next_step'] or 'не зафиксирован'), '', 'ОЦЕНКА ПО НАВЫКАМ']
     for k, title, m in SKILLS:
@@ -372,8 +374,8 @@ def render_report(data, session):
             lines += [f"{speaker}, реплика {e['message_id']}: «{e['quote']}»"]
     lines += ['', 'ПРОВЕРКА СИМУЛЯЦИИ'] + (['• ' + x for x in data['simulation_issues']] or ['Нет замечаний.'])
     for title, field in [('ЧТО ПОЛУЧИЛОСЬ', 'strengths'), ('ЧТО СНИЗИЛО ОЦЕНКУ', 'mistakes')]:
-        lines += ['', title] + (['• ' + x['text'] for x in data[field]] or ['Не отмечено.'])
-    lines += ['', 'ПЛАН ДЛЯ РУКОВОДИТЕЛЯ',
+        lines += ['', title] + (['• ' + x['text'] for x in data[field]] or ['Недоступно: требуется проверка.' if data.get('technical_partial') else 'Не отмечено.'])
+    lines += ['', 'КОНКРЕТНЫЕ РЕКОМЕНДАЦИИ И ЗАДАНИЯ МЕНЕДЖЕРУ', 'ПЛАН ДЛЯ РУКОВОДИТЕЛЯ',
               'По этой тренировке: выберите одно задание и проверьте его в повторном разговоре. '
               'Вывод о сотруднике делайте по нескольким разговорам.']
     if not data['simulation_valid']:
@@ -389,28 +391,26 @@ def render_report(data, session):
                   'Задание сотруднику: ' + task['exercise'],
                   'Пример формулировки: ' + task['example'],
                   'Как руководителю проверить: ' + task['success_check']]
-    facts = {f['id']: f['text'] for f in session['card']['facts']}
-    for title, field in [('ЧТО УДАЛОСЬ ВЫЯСНИТЬ', 'revealed'), ('ЧТО ОСТАЛОСЬ СКРЫТЫМ', 'missed')]:
-        lines += ['', title] + (['• ' + facts[i] for i in data[field]] or ['Не отмечено.'])
+    lines += ['', 'ЧТО УДАЛОСЬ ВЫЯСНИТЬ']
+    if data.get('technical_partial'):
+        lines += ['Недоступно: требуется сверка вопросов и ответов по сохранённому диалогу.']
+    else:
+        lines += ['Ответы клиента в разговоре (факты необходимо отличать от интерпретаций):']
+        client_replies = [m['content'] for m in session['history'][1:] if m['role'] == 'assistant']
+        lines += ['• ' + t for t in client_replies[:5]] or ['Нет зафиксированных ответов.']
+    lines += ['', 'ЧТО ОСТАЛОСЬ СКРЫТЫМ']
+    if include_hidden:
+        facts = {f['id']: f['text'] for f in session['card']['facts']}
+        lines += ['• ' + facts[i] for i in data['missed']] or ['Не установлено.']
+    else:
+        lines += ['Внутренние факты клиента в отчёт сотруднику не включены. Направления дальнейшей проверки указаны в заданиях.']
+    from .reporting import manager_summary
+    lines += ['', manager_summary(data, session)]
     lines += ['', f"Тренировка: {session['id']}", 'Методика: ' + session['versions']['rubric']]
     return '\n'.join(lines)
 
 
 def partial_report(session):
-    """Always available, factual report when the evaluator is unavailable. No invented scores."""
-    turns = [(i+1, m['content']) for i, m in enumerate(session['history']) if m['role'] == 'user']
-    lines = ['РАЗБОР ПО СОХРАНЁННЫМ ДАННЫМ',
-             'Автоматическую оценку сейчас не удалось проверить. Баллы не выставлены; это не оценка 0/100.',
-             'Цель разговора: ' + session['fields']['goal'],
-             f'Учтено реплик менеджера: {len(turns)}.',
-             f"Не учтено из-за технических ошибок: {session.get('technical_errors', 0)}.",
-             'Согласованный шаг по состоянию симуляции: ' + (session['state'].get('agreement') or 'не подтверждён'),
-             '', 'ПОСЛЕДНИЕ РЕПЛИКИ МЕНЕДЖЕРА']
-    lines += [f'Реплика {i}: «{text}»' for i, text in turns[-3:]]
-    lines += ['', 'ЗАДАНИЕ ДЛЯ СОВМЕСТНОГО РАЗБОРА',
-              'Попросите сотрудника выбрать из сохранённого разговора один вопрос и последовавший ответ клиента. '
-              'Пусть объяснит, что выяснил и как использовал ответ в следующей реплике.',
-              'Критерий проверки: названы конкретные реплики, а предложенный следующий вопрос опирается на ответ клиента.',
-              'Это упражнение для проверки, а не установленный недостаток сотрудника.',
-              '', 'Разговор сохранён. «Обновить разбор» повторит только оценку, без новой тренировки.']
-    return '\n'.join(lines)
+    """Same sections and rubric, with explicit unavailability instead of invented scores."""
+    from .reporting import fallback_data
+    return render_report(fallback_data(session), session)
