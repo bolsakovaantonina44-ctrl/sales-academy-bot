@@ -3,7 +3,41 @@ import copy
 from datetime import datetime, timezone
 
 
-def prepare_card(card, difficulty):
+FOCUS_OBJECTIONS = {
+    'price': {
+        'label': 'Дорого',
+        'text': 'Дорого.',
+        'resolved_when': ('Менеджер уточнил, что именно клиент считает дорогим или с чем сравнивает, '
+                          'связал ценность с выявленной задачей и не ушёл сразу в скидку.'),
+    },
+    'no_need': {
+        'label': 'Нам не надо',
+        'text': 'Нам это сейчас не нужно.',
+        'resolved_when': ('Менеджер выяснил причину неактуальности и текущую ситуацию, а затем либо нашёл '
+                          'реальный повод продолжить, либо корректно квалифицировал отказ.'),
+    },
+    'supplier': {
+        'label': 'Уже есть поставщик',
+        'text': 'У нас уже есть поставщик.',
+        'resolved_when': ('Менеджер выяснил, что устраивает и что важно в текущем поставщике, не атаковал конкурента '
+                          'и нашёл критерий, при котором имеет смысл рассмотреть альтернативу.'),
+    },
+    'send_info': {
+        'label': 'Пришлите информацию',
+        'text': 'Пришлите информацию, я посмотрю.',
+        'resolved_when': ('Менеджер уточнил, какая информация действительно нужна, зачем она клиенту, и согласовал '
+                          'содержательное условие следующего контакта вместо простой отправки презентации.'),
+    },
+    'no_time': {
+        'label': 'Нет времени',
+        'text': 'Сейчас нет времени.',
+        'resolved_when': ('Менеджер коротко обозначил причину разговора и пользу через задачу клиента, затем согласовал '
+                          'допустимый формат или конкретное условие следующего контакта.'),
+    },
+}
+
+
+def prepare_card(card, difficulty, focus=None):
     card = copy.deepcopy(card)
     count = {'easy': 1, 'medium': 2, 'hard': 3}[difficulty]
     # Existing template barriers keep their meaning but become spoken objections.
@@ -15,6 +49,14 @@ def prepare_card(card, difficulty):
     }
     for b in card['barriers']:
         b['text'] = spoken.get(b['id'], b['text'])
+
+    # A selected training focus is deterministic: the trainee must encounter it.
+    if focus in FOCUS_OBJECTIONS:
+        selected = FOCUS_OBJECTIONS[focus]
+        focused = dict(id='focus_' + focus, text=selected['text'], resolved_when=selected['resolved_when'])
+        card['barriers'] = [focused] + [b for b in card['barriers'] if b['id'] != focused['id']
+                                            and b['text'].strip().lower() != focused['text'].strip().lower()]
+
     additions = [
         ('attention', 'Пришлите информацию, я посмотрю.',
          'Менеджер выяснил актуальность и согласовал содержательный повод продолжения, а не просто согласился прислать презентацию.'),
@@ -27,7 +69,7 @@ def prepare_card(card, difficulty):
         if len(card['barriers']) >= count:
             break
         ident = 'required_' + ident
-        if ident not in {b['id'] for b in card['barriers']}:
+        if ident not in {b['id'] for b in card['barriers']} and text.lower() not in {b['text'].lower() for b in card['barriers']}:
             card['barriers'].append(dict(id=ident, text=text, resolved_when=condition))
     card['barriers'] = card['barriers'][:count]
     if difficulty == 'hard':
@@ -60,8 +102,8 @@ def apply_behavior(session, plan, state):
     state['required_objection'] = ''
     state['required_objection_id'] = ''
     unseen = [b for b in barriers if b['id'] not in shown]
-    # Easy gives the manager room to establish contact. Medium creates resistance from the
-    # first substantive exchange; hard keeps pressure throughout the conversation.
+    # Easy gives room to establish contact. Medium introduces resistance quickly.
+    # Hard keeps pressure throughout the conversation.
     schedule = {
         'easy': (3,),
         'medium': (1, 4),
