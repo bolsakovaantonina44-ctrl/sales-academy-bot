@@ -10,7 +10,7 @@ from pathlib import Path
 from academy.ai import AI
 from academy.engine import Engine, deliver
 from academy.store import Store
-from academy.domain import normalize_command, upgrade_session, chunks
+from academy.domain import normalize_command, upgrade_session, chunks, is_finish_command
 from academy.diagnostics import log_failure
 
 LOG = logging.getLogger('academy')
@@ -57,17 +57,21 @@ def receive_text(store, event_key, user_id, chat_id, kind, text, send):
     if accepted and kind == 'text':
         cmd = normalize_command(text)
         if cmd in ('начать тренировку', '/begin'):
-            # Receipt is independent of the ordered worker and slow card/model requests.
             try:
                 send(chat_id, 'Запускаю тренировку…' if store.current(user_id)['phase'] == 'ready'
                      else 'Запрос принят. Проверяю состояние тренировки…')
             except Exception:
-                pass  # Input remains durable even if the cosmetic acknowledgement fails.
+                pass
+        elif is_finish_command(text):
+            try:
+                send(chat_id, 'Завершаю тренировку. Готовлю разбор — это может занять около 1 минуты…')
+            except Exception:
+                pass
         elif cmd in ('/pdf', 'сформировать отчет', 'скачать результат', 'отчет сотруднику', 'отчет руководителю'):
             try:
                 send(chat_id, 'Готовлю файл. Это может занять около 1 минуты…')
             except Exception:
-                pass  # File request remains durable even if the acknowledgement fails.
+                pass
     return accepted
 
 
@@ -142,7 +146,7 @@ def worker(store, engine, ai, bot, stop, send):
             try:
                 bot.send_chat_action(event['chat_id'], 'typing')
             except Exception:
-                pass  # Cosmetic action must never abort a persisted turn.
+                pass
             stage = 'transcription' if event['kind'] == 'voice' else 'conversation'
             if event['kind'] == 'voice':
                 info = bot.get_file(event['text'])
@@ -161,13 +165,12 @@ def worker(store, engine, ai, bot, stop, send):
             if not _handle_lpr_gate(store, event):
                 engine.handle(event)
         except Exception as exc:
-            # Do not log API exception bodies, tokens, card contents or entire user messages.
             log_failure(event, store.current(event['user_id']), locals().get('stage', 'transport'), exc)
             store.fail(event, type(exc).__name__)
         try:
             deliver(store, event['user_id'], send)
         except Exception:
-            pass  # Durable outbox retried independently, without another model call.
+            pass
 
 
 def main():
@@ -193,10 +196,9 @@ def main():
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         raise RuntimeError('Another worker is using this database') from None
-    # Synchronous handlers only persist arrivals. All slow work is in one ordered worker.
     bot = telebot.TeleBot(os.environ['TELEGRAM_TOKEN'], threaded=False)
     client = OpenAI(api_key=os.environ['OPENAI_API_KEY'], timeout=90, max_retries=1)
-    model = os.getenv('OPENAI_MODEL', 'gpt-5.6-luna')  # Original default, availability must be verified.
+    model = os.getenv('OPENAI_MODEL', 'gpt-5.6-luna')
     ai = AI(client, model, os.getenv('OPENAI_TRANSCRIBE_MODEL', 'gpt-4o-mini-transcribe'),
             os.getenv('OPENAI_EVAL_MODEL', model))
     LOG.info('Startup: opening persistent database at %s', path)
@@ -265,11 +267,10 @@ def main():
     @bot.message_handler(content_types=['text', 'voice'])
     def incoming(message):
         if message.chat.type != 'private':
-            return  # No shared hidden cards in groups.
+            return
         kind = 'voice' if message.content_type == 'voice' else 'text'
         text = message.voice.file_id if kind == 'voice' else message.text
 
-        # Admin-only cross-user review. Never expose these commands to normal users.
         if kind == 'text' and message.from_user.id in admins and text:
             cmd = normalize_command(text)
             if cmd in ('сессии пользователей', '/admin'):
