@@ -4,8 +4,9 @@ from .reporting import fallback_data
 
 
 def _short(text, limit=220):
+    """Normalize model prose but never amputate a word or sentence in the report."""
     value = ' '.join((text or '').split())
-    return value if len(value) <= limit else value[:limit - 1].rstrip() + '…'
+    return value
 
 
 def render_report(data, session, include_hidden=False):

@@ -202,7 +202,10 @@ class Engine:
             else:
                 self.make_report(s, event)
                 s['phase'] = 'completed'
-                replies = [s['report'], 'Разбор сохранён. Доступны «Посмотреть разбор», «Скачать результат» и «Новая тренировка».']
+                replies = [s['report'], f"__academy_pdf__:{s['id']}:employee"]
+                if user in self.admin_ids:
+                    replies.append(f"__academy_pdf__:{s['id']}:supervisor")
+                replies.append('Разбор сохранён. PDF-файл отправлен автоматически. Доступны «Посмотреть разбор», «Скачать результат» и «Новая тренировка».')
                 if user not in self.admin_ids and self.store.attempts(user) >= self.limit:
                     replies.append(f'Вы завершили доступные {self.limit} тренировки.\n\n' + s['knowledge']['offer'])
         elif s['phase'] == 'completed':

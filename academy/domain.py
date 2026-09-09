@@ -180,17 +180,28 @@ def is_finish_command(text):
 
 
 def chunks(text, limit=3500):
-    """Count UTF-16 units; Telegram limits apply even to emoji-heavy reports."""
-    result, current, count = [], [], 0
-    for ch in text:
-        width = 2 if ord(ch) > 0xffff else 1
-        if count + width > limit:
-            result.append(''.join(current))
-            current, count = [], 0
-        current.append(ch)
-        count += width
-    if current:
-        result.append(''.join(current))
+    """Split without losing text, preferring paragraph/sentence/word boundaries."""
+    def units(value):
+        return len(value.encode('utf-16-le')) // 2
+
+    result, remaining = [], text
+    while units(remaining) > limit:
+        count = end = 0
+        for end, ch in enumerate(remaining, 1):
+            count += 2 if ord(ch) > 0xffff else 1
+            if count > limit:
+                end -= 1
+                break
+        window = remaining[:end]
+        floor = max(1, end // 2)
+        paragraph = window.rfind('\n', floor) + 1
+        sentences = [m.end() for m in re.finditer(r'[.!?…][\"»)]?\s+', window) if m.end() >= floor]
+        word = window.rfind(' ', floor) + 1
+        cut = paragraph or (sentences[-1] if sentences else 0) or word or end
+        result.append(remaining[:cut])
+        remaining = remaining[cut:]
+    if remaining:
+        result.append(remaining)
     return result
 
 

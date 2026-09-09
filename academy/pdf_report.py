@@ -132,7 +132,7 @@ def render_pdf(session, audience='employee'):
         for key, skill_label, maximum in SKILLS:
             item = skills[key]
             value = item['score']
-            short_reason = item['reason'][:220] + ('…' if len(item['reason']) > 220 else '')
+            short_reason = ' '.join(item['reason'].split())
             story.append(p(f"{skill_label}: {value}/{maximum if value is not None else ''} — {short_reason}" if value is not None
                            else f"{skill_label}: недоступно — {short_reason}"))
 

@@ -123,3 +123,20 @@ class LiveRegressions(unittest.TestCase):
         self.assertFalse(any('Показать скрытый сценарий' in r or 'Повторить обработку' in r for r in rows))
         self.send('Отчёт руководителю')
         self.assertFalse(any(x['body'].endswith(':supervisor') for x in self.store.outgoing(10)))
+
+    def test_finish_queues_pdf_automatically_and_report_prose_is_not_amputated(self):
+        self.send('/start')
+        self.send('Тестовый Менеджер')
+        self.send('1')
+        self.send('Дорого')
+        self.send('Начать тренировку')
+        self.send('Для какой задачи вам нужен материал?')
+        long_reason = ('Менеджер уточнил задачу клиента и получил содержательный ответ. '
+                       'Затем предложил продолжить обсуждение на демонстрации.')
+        self.ai.evaluate = Mock(return_value=core.evaluation(self.store.current(10)))
+        data = self.ai.evaluate.return_value
+        data['skills'][0]['reason'] = long_reason
+        self.send('/finish')
+        outgoing = self.store.outgoing(10)
+        self.assertTrue(any(x['body'].startswith('__academy_pdf__:') for x in outgoing))
+        self.assertIn(long_reason, ''.join(x['body'] for x in outgoing))

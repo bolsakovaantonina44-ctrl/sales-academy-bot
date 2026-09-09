@@ -132,6 +132,10 @@ class CoreTests(unittest.TestCase):
     def test_split_utf16_long_report(self):
         text='Разбор😀\n'*2000; parts=chunks(text)
         self.assertEqual(''.join(parts),text); self.assertTrue(all(len(x.encode('utf-16-le'))//2<=3500 for x in parts))
+        prose=('Это первое законченное предложение. ' * 180).strip()
+        prose_parts=chunks(prose,350)
+        self.assertEqual(''.join(prose_parts),prose)
+        self.assertTrue(all(part.rstrip().endswith('.') for part in prose_parts[:-1]))
     def test_no_invented_barrier_ids(self):
         with self.assertRaises(ValueError):reduce_plan(initial_state(),plan(resolved_ids=['invented']),template('1')['card'])
     def test_success_without_resolved_barriers_denied(self):

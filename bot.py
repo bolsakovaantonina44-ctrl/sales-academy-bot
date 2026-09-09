@@ -292,6 +292,19 @@ def main():
         return '\n'.join(lines)
 
     def send(chat_id, text):
+        if str(text).startswith('__academy_pdf__:'):
+            marker, raw_id, audience = str(text).split(':', 2)
+            if marker != '__academy_pdf__' or audience not in ('employee', 'supervisor'):
+                raise ValueError('Invalid PDF delivery marker')
+            owner_id, report_session = load_any_session(int(raw_id))
+            if not report_session or (owner_id != chat_id and chat_id not in admins):
+                raise PermissionError('Report session is unavailable for this chat')
+            if audience == 'supervisor' and chat_id not in admins:
+                raise PermissionError('Supervisor report requires admin access')
+            from academy.pdf_report import render_pdf
+            title = 'Отчёт_руководителю' if audience == 'supervisor' else 'Разбор_тренировки'
+            send_file(chat_id, render_pdf(report_session, audience), f'{title}_{raw_id}.pdf')
+            return
         user_id = chat_id
         try:
             s = store.current(user_id)
