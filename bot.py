@@ -122,7 +122,7 @@ def _lpr_search_attempt(text):
 
 
 def _handle_lpr_gate(store, event):
-    """One realistic discovery step before the target LPR for outbound/cold scenarios."""
+    """One or two realistic discovery steps before the target LPR; never loop indefinitely."""
     if event.get('kind') != 'text':
         return False
     text = event.get('text', '').strip()
@@ -133,18 +133,28 @@ def _handle_lpr_gate(store, event):
         return False
     if not text:
         return False
+
     identity = s['card'].get('identity', {})
+    target = identity.get('job_title') or s['fields'].get('customer') or 'ответственный сотрудник'
+    name = identity.get('name', '').strip()
+    connect = (f'Да, этим занимается {name}, {target}. Сейчас соединю.' if name
+               else f'Да, этим занимается {target}. Сейчас соединю.')
+    stage = s.get('lpr_gate_turns', 0)
+
     if _lpr_search_attempt(text):
-        target = identity.get('job_title') or s['fields'].get('customer') or 'ответственный сотрудник'
-        name = identity.get('name', '').strip()
-        reply = (f'Да, этим занимается {name}, {target}. Сейчас соединю.' if name
-                 else f'Да, этим занимается {target}. Сейчас соединю.')
+        reply = connect
+        s['lpr_gate_passed'] = True
+    elif stage == 0:
+        reply = 'Добрый день. Подскажите, по какому вопросу?'
+        s['lpr_gate_turns'] = 1
+    elif len(text.split()) >= 3 or stage >= 2:
+        # One clarification is enough: do not trap the manager in a secretary loop.
+        reply = connect
         s['lpr_gate_passed'] = True
     else:
-        stage = s.get('lpr_gate_turns', 0)
-        reply = ('Добрый день. Подскажите, по какому вопросу?' if stage == 0
-                 else 'Понял. С кем именно вы хотите поговорить по этому вопросу?')
-        s['lpr_gate_turns'] = stage + 1
+        reply = 'Уточните, пожалуйста, вопрос чуть конкретнее — я подскажу, кто за это отвечает.'
+        s['lpr_gate_turns'] = 2
+
     s['history'] += [dict(role='user', content=text), dict(role='assistant', content=reply)]
     s['state']['turns'] = s['state'].get('turns', 0) + 1
     store.commit(event, s, [reply], counted=True)
