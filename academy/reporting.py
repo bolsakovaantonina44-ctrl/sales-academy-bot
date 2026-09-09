@@ -1,5 +1,6 @@
 """Shared report data and management summary; unavailable is never a zero score."""
 from .domain import SKILLS
+from .pacing import FOCUS_OBJECTIONS
 
 UNAVAILABLE = 'недоступно: требуется проверка сохранённого диалога'
 
@@ -43,11 +44,14 @@ def total_score(data):
 def manager_summary(data, session):
     score = total_score(data)
     employee = session.get('employee', {})
+    focus = session.get('training_focus')
+    focus_label = FOCUS_OBJECTIONS.get(focus, {}).get('label', 'Общий разговор')
     lines = ['РЕЗУЛЬТАТ ДЛЯ РУКОВОДИТЕЛЯ',
              'Сотрудник: ' + (employee.get('name') or 'ФИО не указано') + ' · ID ' + str(employee.get('id', 'не указан')),
              'Дата: ' + session.get('completed_at', session.get('started_at', 'не сохранена')),
              'Сценарий: ' + session['fields']['customer'] + ' / ' + session['fields']['goal'],
-             'Сложность: ' + dict(easy='лёгкий', medium='средний', hard='сложный')[session['fields']['difficulty']],
+             'Фокус тренировки: ' + focus_label,
+             'Сложность: ' + {'easy':'1 — лёгкая', 'medium':'2 — средняя', 'hard':'3 — сложная'}[session['fields']['difficulty']],
              'Общий балл: ' + (f'{score}/100' if score is not None else 'недоступен')]
     skills = {x['id']: x for x in data['skills']}
     for key, title, maximum in SKILLS:
@@ -69,5 +73,5 @@ def manager_summary(data, session):
         lines.append(f"Тренировка №{previous['session_id']}: {previous['score']}/100 → {score}/100 ({score - previous['score']:+d}).")
         lines.append('Сравнение баллов учебных сессий, не вывод об устойчивом росте навыка.')
     else:
-        lines.append('Нет сопоставимой проверенной оценки по той же методике, сценарию и сложности.')
+        lines.append('Нет сопоставимой проверенной оценки по той же методике, сценарию, фокусу и сложности.')
     return '\n'.join(lines)
