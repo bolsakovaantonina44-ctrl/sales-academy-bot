@@ -76,7 +76,8 @@ def keyboard_rows(session, failed=False, admin=False):
         if admin:
             rows.append(['Сессии пользователей'])
         return rows
-    rows = [['1', '2', '3'], ['Мои тренировки']]
+    # Product-specific demo scenarios remain internal fixtures, not public choices.
+    rows = [['Мои тренировки']]
     if admin:
         rows.append(['Сессии пользователей'])
     return rows
@@ -338,6 +339,10 @@ def main():
 
     @bot.message_handler(content_types=['text'])
     def on_text(message):
+        if normalize_command(message.text or '') in ('/sessions', 'сессии пользователей'):
+            send(message.chat.id, admin_sessions_text() if message.chat.id in admins
+                 else 'Сессии пользователей доступны только администратору.')
+            return
         receive_text(store, f'tg:{message.chat.id}:{message.message_id}', message.chat.id, message.chat.id,
                      'text', message.text or '', send)
 

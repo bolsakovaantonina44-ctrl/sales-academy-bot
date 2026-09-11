@@ -70,7 +70,8 @@ class MVPTests(unittest.TestCase):
     def test_new_custom_session_has_no_product_default(self):
         s=session_empty();self.assertEqual(s['fields']['product'],'')
         self.assertEqual(s['knowledge']['product_knowledge'],{})
-        self.assertIn('Керамогранит',menu())  # Explicit demo label, never a hidden choice.
+        self.assertNotIn('Керамогранит',menu())
+        self.assertIn('любым продуктом или услугой',menu())
 
     def test_generated_card_ids_are_owned_by_engine(self):
         card=copy.deepcopy(template('1')['card'])

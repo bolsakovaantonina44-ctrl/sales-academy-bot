@@ -12,10 +12,15 @@ from academy.store import Store
 from academy.engine import Engine, deliver
 from academy.domain import initial_state
 from test_core import FakeAI
-from bot import worker
+from bot import worker, keyboard_rows
 
 
 class TransportTests(unittest.TestCase):
+    def test_public_setup_has_no_product_specific_demo_buttons(self):
+        rows = keyboard_rows({'phase': 'setup'}, admin=False)
+        self.assertEqual(rows, [['Мои тренировки']])
+        self.assertFalse(any(value in ('1', '2', '3') for row in rows for value in row))
+
     def test_waiting_earlier_message_cannot_be_overtaken(self):
         with tempfile.TemporaryDirectory() as temp:
             s=Store(Path(temp)/'db')
