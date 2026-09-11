@@ -296,24 +296,125 @@ def main():
     admins = [int(v.strip()) for v in os.getenv('ADMIN_IDS', '').split(',') if v.strip()]
     engine = Engine(store, ai, limit=int(os.getenv('FREE_TRAININGS', '3')), admin_ids=admins)
 
-    def admin_sessions_text():
+    def load_admin_session(session_id):
         with store.db() as db:
-            rows = db.execute('SELECT id,user_id,payload,counted FROM sessions ORDER BY id DESC LIMIT 15').fetchall()
-        lines = ['ПОСЛЕДНИЕ СЕССИИ ПОЛЬЗОВАТЕЛЕЙ']
+            row = db.execute('SELECT id,user_id,payload,counted FROM sessions WHERE id=?', (session_id,)).fetchone()
+        if not row:
+            return None, None
+        try:
+            return row, upgrade_session(json.loads(row['payload']))
+        except Exception:
+            return row, None
+
+    def session_score(session):
+        if not session or not session.get('report_data'):
+            return None
+        from academy.reporting import total_score
+        return total_score(session['report_data'])
+
+    def admin_sessions_page(page=0, page_size=8):
+        page = max(0, int(page))
+        with store.db() as db:
+            total = db.execute('SELECT COUNT(*) FROM sessions').fetchone()[0]
+            rows = db.execute(
+                'SELECT id,user_id,payload,counted FROM sessions ORDER BY id DESC LIMIT ? OFFSET ?',
+                (page_size, page * page_size),
+            ).fetchall()
+        markup = telebot.types.InlineKeyboardMarkup(row_width=1)
         for row in rows:
             try:
                 s = upgrade_session(json.loads(row['payload']))
-                customer = s.get('fields', {}).get('customer', '') or 'сценарий не указан'
-                employee = s.get('employee', {}).get('name') or 'ФИО не указано'
-                score = None
-                if s.get('report_data'):
-                    from academy.reporting import total_score
-                    score = total_score(s['report_data'])
-                lines.append(f"#{row['id']} · TG {row['user_id']} · {employee} · {customer} · "
-                             + (f'{score}/100' if score is not None else s.get('phase', ''))) 
+                employee = s.get('employee', {}).get('name') or f"TG {row['user_id']}"
+                score = session_score(s)
+                suffix = f'{score}/100' if score is not None else s.get('phase', '')
+                label = f"#{row['id']} · {employee[:24]} · {suffix}"
             except Exception:
-                lines.append(f"#{row['id']} · TG {row['user_id']} · не удалось прочитать")
+                label = f"#{row['id']} · TG {row['user_id']} · ошибка чтения"
+            markup.add(telebot.types.InlineKeyboardButton(label, callback_data=f"adm:session:{row['id']}:{page}"))
+        nav = []
+        if page > 0:
+            nav.append(telebot.types.InlineKeyboardButton('◀️ Назад', callback_data=f'adm:sessions:{page - 1}'))
+        if (page + 1) * page_size < total:
+            nav.append(telebot.types.InlineKeyboardButton('Вперёд ▶️', callback_data=f'adm:sessions:{page + 1}'))
+        if nav:
+            markup.row(*nav)
+        start = page * page_size + 1 if total else 0
+        end = min((page + 1) * page_size, total)
+        text = f'СЕССИИ ПОЛЬЗОВАТЕЛЕЙ\nПоказаны {start}–{end} из {total}. Нажмите на сессию, чтобы открыть её.'
+        return text, markup
+
+    def admin_session_card(session_id):
+        row, s = load_admin_session(session_id)
+        if not row:
+            return 'Сессия не найдена.'
+        if not s:
+            return f"Сессия #{session_id}\nНе удалось прочитать сохранённые данные."
+        fields = s.get('fields', {})
+        employee = s.get('employee', {}).get('name') or 'ФИО не указано'
+        score = session_score(s)
+        identity = (s.get('card') or {}).get('identity', {})
+        focus = s.get('training_focus') or 'не указан'
+        lines = [
+            f'СЕССИЯ #{session_id}',
+            f"Пользователь: {employee}",
+            f"Telegram ID: {row['user_id']}",
+            f"Статус: {s.get('phase', 'неизвестно')}",
+            f"Итог: {score}/100" if score is not None else 'Итог: разбор ещё не сформирован',
+            f"Навык/фокус: {focus}",
+            f"Клиент/сценарий: {fields.get('customer') or 'не указан'}",
+            f"Продукт: {fields.get('product') or 'не указан'}",
+            f"Цель: {fields.get('goal') or 'не указана'}",
+            f"Сложность: {fields.get('difficulty') or 'не указана'}",
+        ]
+        if identity:
+            client_bits = [identity.get('name'), identity.get('job_title'), identity.get('company')]
+            client_bits = [str(v).strip() for v in client_bits if str(v or '').strip()]
+            if client_bits:
+                lines.append('Карточка клиента: ' + ' · '.join(client_bits))
+        lines.append(f"Реплик в диалоге: {len(s.get('history') or [])}")
         return '\n'.join(lines)
+
+    def admin_session_markup(session_id, page=0):
+        markup = telebot.types.InlineKeyboardMarkup(row_width=2)
+        markup.row(
+            telebot.types.InlineKeyboardButton('💬 Показать диалог', callback_data=f'adm:dialog:{session_id}:{page}'),
+            telebot.types.InlineKeyboardButton('📄 Отчёт PDF', callback_data=f'adm:pdf:{session_id}:{page}'),
+        )
+        markup.row(telebot.types.InlineKeyboardButton('← К списку сессий', callback_data=f'adm:sessions:{page}'))
+        return markup
+
+    def admin_dialogue_text(session_id):
+        row, s = load_admin_session(session_id)
+        if not row:
+            return ['Сессия не найдена.']
+        if not s:
+            return [f'Сессия #{session_id}: не удалось прочитать данные.']
+        history = s.get('history') or []
+        if not history:
+            return [f'Сессия #{session_id}: диалог пуст.']
+        lines = [f'ДИАЛОГ СЕССИИ #{session_id}']
+        for index, item in enumerate(history, 1):
+            role = item.get('role')
+            if role == 'user':
+                speaker = '👤 Менеджер'
+            elif role == 'assistant':
+                speaker = '🤖 Клиент'
+            else:
+                continue
+            content = str(item.get('content', '')).strip()
+            if content:
+                lines.append(f'{index}. {speaker}: {content}')
+        return chunks('\n\n'.join(lines), limit=3800)
+
+    def send_admin_sessions(chat_id, page=0, edit_message=None):
+        text, markup = admin_sessions_page(page)
+        if edit_message is not None:
+            try:
+                bot.edit_message_text(text, chat_id, edit_message, reply_markup=markup)
+                return
+            except Exception:
+                pass
+        bot.send_message(chat_id, text, reply_markup=markup)
 
     def send(chat_id, text):
         if str(text).startswith('__academy_pdf__:'):
@@ -340,11 +441,54 @@ def main():
     @bot.message_handler(content_types=['text'])
     def on_text(message):
         if normalize_command(message.text or '') in ('/sessions', 'сессии пользователей'):
-            send(message.chat.id, admin_sessions_text() if message.chat.id in admins
-                 else 'Сессии пользователей доступны только администратору.')
+            if message.chat.id in admins:
+                send_admin_sessions(message.chat.id, 0)
+            else:
+                send(message.chat.id, 'Сессии пользователей доступны только администратору.')
             return
         receive_text(store, f'tg:{message.chat.id}:{message.message_id}', message.chat.id, message.chat.id,
                      'text', message.text or '', send)
+
+    @bot.callback_query_handler(func=lambda call: str(call.data or '').startswith('adm:'))
+    def on_admin_callback(call):
+        chat_id = call.message.chat.id
+        if chat_id not in admins:
+            bot.answer_callback_query(call.id, 'Доступно только администратору.', show_alert=True)
+            return
+        try:
+            parts = str(call.data).split(':')
+            action = parts[1]
+            if action == 'sessions':
+                page = int(parts[2]) if len(parts) > 2 else 0
+                send_admin_sessions(chat_id, page, call.message.message_id)
+                bot.answer_callback_query(call.id)
+                return
+            session_id = int(parts[2])
+            page = int(parts[3]) if len(parts) > 3 else 0
+            if action == 'session':
+                bot.edit_message_text(
+                    admin_session_card(session_id), chat_id, call.message.message_id,
+                    reply_markup=admin_session_markup(session_id, page),
+                )
+                bot.answer_callback_query(call.id)
+                return
+            if action == 'dialog':
+                bot.answer_callback_query(call.id)
+                for part in admin_dialogue_text(session_id):
+                    bot.send_message(chat_id, part)
+                bot.send_message(chat_id, 'Действия с сессией:', reply_markup=admin_session_markup(session_id, page))
+                return
+            if action == 'pdf':
+                bot.answer_callback_query(call.id, 'Готовлю отчёт…')
+                deliver_pdf(bot, store, chat_id, f'__academy_pdf__:{session_id}:supervisor', admins)
+                return
+            bot.answer_callback_query(call.id, 'Неизвестная команда.')
+        except Exception as exc:
+            LOG.exception('Admin session callback failed')
+            try:
+                bot.answer_callback_query(call.id, 'Не удалось открыть сессию.', show_alert=True)
+            except Exception:
+                pass
 
     @bot.message_handler(content_types=['voice'])
     def on_voice(message):
