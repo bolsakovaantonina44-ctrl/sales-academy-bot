@@ -41,6 +41,25 @@ def _focus_rows():
     return [[labels[0], labels[1]], [labels[2], labels[3]], [labels[4]]]
 
 
+def connect_telegram(telebot_module, token_sources):
+    """Use the primary token, with a separately stored known token as recovery."""
+    attempted = set()
+    for source, token in token_sources:
+        token = (token or '').strip()
+        if not token or token in attempted:
+            continue
+        attempted.add(token)
+        candidate = telebot_module.TeleBot(token, threaded=False)
+        try:
+            identity = candidate.get_me()
+            webhook = candidate.get_webhook_info(timeout=15)
+        except Exception as exc:
+            LOG.warning('Startup: Telegram token rejected source=%s kind=%s', source, type(exc).__name__)
+            continue
+        return candidate, identity, webhook, source
+    raise RuntimeError('Telegram startup check failed; verify configured tokens and network')
+
+
 def keyboard_rows(session, failed=False, admin=False):
     phase = session['phase']
     if failed:
@@ -258,9 +277,10 @@ def main():
     import telebot
     from openai import OpenAI
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
-    for secret in ('TELEGRAM_TOKEN', 'OPENAI_API_KEY'):
-        if not os.getenv(secret):
-            raise RuntimeError(secret + ' is not set')
+    if not os.getenv('OPENAI_API_KEY'):
+        raise RuntimeError('OPENAI_API_KEY is not set')
+    if not (os.getenv('TELEGRAM_TOKEN') or os.getenv('LEGACY_BOT_TOKEN')):
+        raise RuntimeError('TELEGRAM_TOKEN or LEGACY_BOT_TOKEN is not set')
     path = os.getenv('DB_PATH', './data/academy.sqlite3')
     mount = os.getenv('RAILWAY_VOLUME_MOUNT_PATH')
     if os.getenv('RAILWAY_ENVIRONMENT_ID'):
@@ -272,7 +292,6 @@ def main():
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         raise RuntimeError('Another worker is using this database') from None
-    bot = telebot.TeleBot(os.environ['TELEGRAM_TOKEN'], threaded=False)
     client = OpenAI(api_key=os.environ['OPENAI_API_KEY'], timeout=90, max_retries=1)
     model = os.getenv('OPENAI_MODEL', 'gpt-5.6-luna')
     ai = AI(client, model, os.getenv('OPENAI_TRANSCRIBE_MODEL', 'gpt-4o-mini-transcribe'),
@@ -285,14 +304,12 @@ def main():
         pending = db.execute("SELECT COUNT(*) FROM inbox WHERE status IN ('queued','working','waiting')").fetchone()[0]
     LOG.info('Startup: database ready sessions=%s counted_trainings=%s pending_events=%s',
              persisted[0], persisted[1], pending)
-    try:
-        identity = bot.get_me()
-        webhook = bot.get_webhook_info(timeout=15)
-    except Exception as exc:
-        LOG.error('Startup: Telegram connection failed kind=%s', type(exc).__name__)
-        raise RuntimeError('Telegram startup check failed; verify token and network') from None
-    LOG.info('Startup: Telegram bot=@%s webhook_active=%s pending_updates=%s',
-             identity.username, bool(webhook.url), webhook.pending_update_count)
+    bot, identity, webhook, token_source = connect_telegram(telebot, (
+        ('TELEGRAM_TOKEN', os.getenv('TELEGRAM_TOKEN')),
+        ('LEGACY_BOT_TOKEN', os.getenv('LEGACY_BOT_TOKEN')),
+    ))
+    LOG.info('Startup: Telegram bot=@%s token_source=%s webhook_active=%s pending_updates=%s',
+             identity.username, token_source, bool(webhook.url), webhook.pending_update_count)
     admins = [int(v.strip()) for v in os.getenv('ADMIN_IDS', '').split(',') if v.strip()]
     engine = Engine(store, ai, limit=int(os.getenv('FREE_TRAININGS', '3')), admin_ids=admins)
 

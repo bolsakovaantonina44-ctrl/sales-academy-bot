@@ -12,10 +12,35 @@ from academy.store import Store
 from academy.engine import Engine, deliver
 from academy.domain import initial_state
 from test_core import FakeAI
-from bot import worker, keyboard_rows
+from bot import connect_telegram, worker, keyboard_rows
 
 
 class TransportTests(unittest.TestCase):
+    def test_telegram_connection_falls_back_to_recovery_token(self):
+        bots = []
+
+        class FakeBot:
+            def __init__(self, token, threaded=False):
+                self.token = token
+                bots.append(self)
+
+            def get_me(self):
+                if self.token == 'bad-primary':
+                    raise RuntimeError('unauthorized')
+                return SimpleNamespace(username='Academy_sales_trainer_bot')
+
+            def get_webhook_info(self, timeout):
+                return SimpleNamespace(url='', pending_update_count=0)
+
+        module = SimpleNamespace(TeleBot=FakeBot)
+        bot, identity, webhook, source = connect_telegram(
+            module, [('TELEGRAM_TOKEN', 'bad-primary'), ('LEGACY_BOT_TOKEN', 'working-recovery')]
+        )
+        self.assertEqual([item.token for item in bots], ['bad-primary', 'working-recovery'])
+        self.assertEqual(bot.token, 'working-recovery')
+        self.assertEqual(identity.username, 'Academy_sales_trainer_bot')
+        self.assertEqual(source, 'LEGACY_BOT_TOKEN')
+
     def test_public_setup_has_no_product_specific_demo_buttons(self):
         rows = keyboard_rows({'phase': 'setup'}, admin=False)
         self.assertEqual(rows, [['Мои тренировки']])
