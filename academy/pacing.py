@@ -41,6 +41,7 @@ CONTEXT_REQUIRED_BARRIERS = {
     'focus_price', 'focus_no_need', 'focus_supplier', 'focus_send_info',
     'comparable', 'loyalty', 'required_attention', 'required_doubt',
 }
+OFFER_CONTEXT_ACTIONS = {'monologue', 'relevant_argument', 'objection_work'}
 
 
 def prepare_card(card, difficulty, focus=None):
@@ -83,11 +84,9 @@ def prepare_card(card, difficulty, focus=None):
     return card
 
 
-def _barrier_has_context(barrier, plan):
+def _barrier_has_context(barrier, offer_context):
     """Delay objections that are nonsensical before the client has an offer to react to."""
-    if barrier.get('id') not in CONTEXT_REQUIRED_BARRIERS:
-        return True
-    return plan.get('action') in ('monologue', 'relevant_argument', 'objection_work')
+    return barrier.get('id') not in CONTEXT_REQUIRED_BARRIERS or offer_context
 
 
 def apply_behavior(session, plan, state):
@@ -103,6 +102,8 @@ def apply_behavior(session, plan, state):
     substantive = old.get('substantive_turns', 0) + int(plan['intent'] != 'name')
     state['substantive_turns'] = substantive
     action = plan['action']
+    offer_context = old.get('offer_context', False) or action in OFFER_CONTEXT_ACTIONS
+    state['offer_context'] = offer_context
     if action in ('monologue', 'pressure', 'ignored_answer'):
         state['trust'] = max(0, old['trust'] - 1)
         state['interest'] = max(0, old['interest'] - 1)
@@ -132,7 +133,7 @@ def apply_behavior(session, plan, state):
     due = schedule[min(len(shown), len(schedule) - 1)]
     if unseen and substantive >= due and plan['intent'] != 'name' and state['close'] in ('continue', 'success'):
         b = unseen[0]
-        if forced_focus or _barrier_has_context(b, plan):
+        if forced_focus or _barrier_has_context(b, offer_context):
             state['required_objection'], state['required_objection_id'] = b['text'], b['id']
             state['issues'][b['id']] = 'open'
             state['focus_issue_id'] = b['id']

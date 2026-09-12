@@ -77,7 +77,12 @@ class LiveRegressions(unittest.TestCase):
             s['card'] = prepare_card(template('1')['card'], level)
             self.assertEqual(len(s['card']['barriers']), count)
             spoken=[]
-            for _ in range(16):
+            # Establish an actual offer first; contextual objections must not exist before it.
+            opening = core.plan(intent='other', action='monologue', reveal_ids=[])
+            s['state'] = apply_behavior(s, opening, reduce_plan(s['state'], opening, s['card']))
+            if s['state']['required_objection']:
+                spoken.append(s['state']['required_objection'])
+            for _ in range(15):
                 p=core.plan(intent='need')
                 s['state']=apply_behavior(s,p,reduce_plan(s['state'],p,s['card']))
                 if s['state']['required_objection']: spoken.append(s['state']['required_objection'])
