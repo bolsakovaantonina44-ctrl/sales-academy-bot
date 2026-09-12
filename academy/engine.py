@@ -1,7 +1,6 @@
 """Application service. No transport imports or network side effects."""
 import copy
 import json
-import re
 from datetime import datetime, timezone
 from .domain import (session_empty, initial_state, normalize_command, is_finish_command,
                      render_report, partial_report, score_level, VERSION, RUBRIC_VERSION)
@@ -21,7 +20,6 @@ SKIP = ('/skip', 'пропустить эту реплику')
 
 
 def _display_customer(value):
-    """Do not surface obvious keyboard-smash setup values in saved history."""
     value = ' '.join(str(value or '').split()).strip()
     if not value:
         return 'Клиент не указан'
@@ -29,15 +27,14 @@ def _display_customer(value):
     if len(letters) >= 6:
         vowels = set('аеёиоуыэюяaeiouy')
         vowel_ratio = sum(ch in vowels for ch in letters) / len(letters)
-        longest_consonants = 0
-        run = 0
+        run = longest = 0
         for ch in letters:
             if ch in vowels:
                 run = 0
             else:
                 run += 1
-                longest_consonants = max(longest_consonants, run)
-        if vowel_ratio < 0.18 or longest_consonants >= 6:
+                longest = max(longest, run)
+        if vowel_ratio < 0.18 or longest >= 6:
             return 'Некорректно указанный клиент'
     return value[:120]
 
@@ -248,85 +245,93 @@ class Engine:
             if s['phase'] == 'completed' and s['report']:
                 replies = ['Разбор уже сформирован. Нажмите «Посмотреть разбор» или «Скачать результат».']
             elif s['phase'] not in ('active', 'closed'):
-                replies = ['Сначала начните тренировку.']
+                replies = ['Активной тренировки нет.']
+            elif not any(m['role'] == 'user' for m in s['history']):
+                s['phase'] = 'completed'
+                s['report'] = 'Тренировка завершена без реплик менеджера. Оценка не выставлена, попытка не списана.'
+                replies = [s['report']]
             else:
-                if s['phase'] == 'active':
-                    s['phase'], s['outcome'] = 'closed', 'manual_finish'
                 self.make_report(s, event)
                 s['phase'] = 'completed'
-                replies = [s['report'], f"__academy_pdf__:{s['id']}:employee",
-                           'Разбор сохранён. PDF-файл отправлен автоматически. Доступны «Посмотреть разбор», «Скачать результат» и «Новая тренировка».']
+                replies = [s['report'], f"__academy_pdf__:{s['id']}:employee"]
+                if user in self.admin_ids:
+                    replies.append(f"__academy_pdf__:{s['id']}:supervisor")
+                replies.append('Разбор сохранён. PDF-файл отправлен автоматически. Доступны «Посмотреть разбор», «Скачать результат» и «Новая тренировка».')
+                if user not in self.admin_ids and self.store.attempts(user) >= self.limit:
+                    replies.append(f'Вы завершили доступные {self.limit} тренировки.\n\n' + s['knowledge']['offer'])
         elif s['phase'] == 'completed':
-            replies = ['Эта тренировка завершена. Нажмите «Посмотреть разбор» или «Новая тренировка».']
+            replies = ['Эта тренировка завершена. Нажми «Новая тренировка» или «Посмотреть разбор».']
         elif s['phase'] == 'closed':
-            replies = ['Разговор уже завершён. Нажмите «Завершить тренировку», чтобы получить разбор.']
+            replies = ['Клиент закончил разговор. Нажми «Завершить тренировку» для разбора.']
+        elif cmd in ('начать тренировку', '/begin') and s['phase'] != 'ready':
+            replies = ['Тренировка уже запущена. Отправьте реплику клиенту.' if s['phase'] == 'active'
+                       else 'Сначала выберите новую ситуацию для тренировки.']
         elif s['phase'] == 'active':
-            if cmd in ('/start_training', 'начать тренировку'):
-                replies = ['Тренировка уже запущена. Отправьте реплику клиенту или нажмите «Завершить тренировку».']
+            if s['state']['turns'] >= self.max_turns:
+                s['phase'] = 'closed'
+                replies = ['Достигнут лимит длины учебного разговора. Нажми «Завершить тренировку».']
             else:
-                try:
-                    plan = self.ai.plan(s, text)
-                    st = s['state']
-                    st['turns'] += 1
-                    st['substantive_turns'] += 1
-                    for key in ('revealed', 'resolved'):
-                        for ident in plan[key[:-2]+'_ids']:
-                            if ident not in st[key]: st[key].append(ident)
-                    st['trust'] = max(0, min(5, st['trust'] + plan['trust_delta']))
-                    st['interest'] = max(0, min(5, st['interest'] + plan['interest_delta']))
-                    st['issues'] = {u['id']: u['status'] for u in plan['issue_updates']}
-                    st['close'] = plan['close']
-                    st['ending_reason'] = plan.get('reason', '')
-                    if plan['close'] != 'continue': st['required_objection'] = ''
-                    client = self.ai.reply(s, text, st)
-                    s['history'] += [dict(role='user', content=text), dict(role='assistant', content=client)]
-                    replies = [client]
-                    if st['close'] != 'continue':
-                        s['phase'], s['outcome'] = 'closed', st['close']
-                        replies.append('Разговор завершён. Нажмите «Завершить тренировку», чтобы получить разбор.')
-                    elif st['turns'] >= self.max_turns:
-                        s['phase'], s['outcome'] = 'closed', 'limit'
-                        replies.append('Лимит диалога достигнут. Нажмите «Завершить тренировку», чтобы получить разбор.')
-                except Exception as exc:
-                    log_failure(event, s, 'dialogue', exc)
-                    event['failed_text'] = text
-                    replies = ['Не удалось обработать реплику. Можно повторить один раз, пропустить её или завершить тренировку.']
-        elif s['phase'] == 'ready':
-            if cmd in ('/start_training', 'начать тренировку'):
-                if not s.get('training_focus'):
-                    replies = ['Сначала выберите одно возражение для тренировки.']
-                else:
-                    s['phase'], s['state'] = 'active', initial_state(s['card'])
-                    replies = ['Запускаю тренировку…', s['card']['opening']]
-            elif cmd in FOCUS_BY_LABEL:
-                s['training_focus'] = FOCUS_BY_LABEL[cmd]
-                s['card'] = prepare_card(s['fields'], s['training_focus'])
-                replies = [self.setup_summary(s)]
-            elif cmd in LEVELS:
-                s['fields']['difficulty'] = LEVELS[cmd]
-                s['card'] = prepare_card(s['fields'], s.get('training_focus'))
-                replies = [self.setup_summary(s)]
+                answer, state, plan = self.ai.turn(s, text)
+                s['history'] += [dict(role='user', content=text), dict(role='assistant', content=answer)]
+                s['state'] = state
+                s.setdefault('turn_events', []).append(plan)
+                charge = True
+                replies = [answer]
+                if state['close'] != 'continue':
+                    s['phase'] = 'closed'
+                    replies += ['Разговор закончен. Нажми «Завершить тренировку» — получишь разбор.']
+        elif s['phase'] == 'ready' and cmd in FOCUS_BY_LABEL:
+            s['training_focus'] = FOCUS_BY_LABEL[cmd]
+            replies = [self.setup_summary(s)]
+        elif s['phase'] == 'ready' and cmd in LEVELS:
+            s['fields']['difficulty'] = LEVELS[cmd]
+            replies = [self.setup_summary(s)]
+        elif s['phase'] == 'ready' and cmd in ('начать тренировку', '/begin'):
+            if not s.get('training_focus'):
+                replies = ['Сначала выберите, какое возражение тренируем.']
+            elif user not in self.admin_ids and self.store.attempts(user) >= self.limit:
+                replies = [f'Использованы все {self.limit} бесплатные тренировки. Сохранённые разборы доступны в «Мои тренировки».\n\n' + s['knowledge']['offer']]
             else:
-                replies = ['Выберите возражение кнопкой, при необходимости сложность 1–3, затем нажмите «Начать тренировку».']
+                s['card'] = s['card'] or self.ai.card({**s['fields'], 'situation': s['setup'],
+                    'corporate_knowledge': {k: s['knowledge'][k] for k in ('product_knowledge', 'company_rules')}})
+                s['card'] = prepare_card(s['card'], s['fields']['difficulty'], s.get('training_focus'))
+                s['state'] = initial_state()
+                s['phase'] = 'active'
+                s['started_at'] = datetime.now(timezone.utc).isoformat()
+                s['versions'].update(model=self.ai.model, evaluator=self.ai.eval_model,
+                                     transcription=self.ai.transcribe_model)
+                s['history'] = []
+                focus_label = FOCUS_OBJECTIONS[s['training_focus']]['label']
+                replies = [f'Тренировка началась. Фокус: «{focus_label}». Начните разговор первой репликой — как будто вы сами звоните или пишете клиенту.']
+        elif cmd in TEMPLATES and s['phase'] in ('setup', 'ready') and s['phase'] != 'ready':
+            t = template(cmd)
+            s['template'], s['card'] = cmd, t['card']
+            s['source'] = t.get('source', 'company' if s['knowledge']['scenarios'] else 'demo')
+            s['fields'].update({k: t[k] for k in ('product', 'customer', 'goal')})
+            s['phase'], s['awaiting'] = 'ready', None
+            replies = [self.setup_summary(s)]
         else:
-            if cmd in TEMPLATES:
-                fields = template(cmd)
-                s.update(fields=fields, phase='ready', training_focus=None, card=prepare_card(fields, None))
-                replies = [self.setup_summary(s)]
-            elif cmd in FOCUS_BY_LABEL:
-                replies = ['Сначала опишите рабочую ситуацию одним сообщением.']
+            if s['awaiting']:
+                if len(text) < 2:
+                    replies = [QUESTIONS[s['awaiting']]]
+                else:
+                    s['fields'][s['awaiting']] = text
+                    s['setup'].append(dict(role='user', content=text))
+                    s['awaiting'] = None
             else:
-                try:
-                    fields = self.ai.extract_fields(text)
-                    fields['difficulty'] = fields.get('difficulty') if fields.get('difficulty') in ('easy', 'medium', 'hard') else 'medium'
-                    s.update(fields=fields, phase='ready', training_focus=None, card=prepare_card(fields, None))
+                s['fields'] = self.ai.extract(s, text)
+                s['setup'].append(dict(role='user', content=text))
+                s['card'], s['template'] = None, None
+            if not replies:
+                missing = next((k for k in QUESTIONS if not s['fields'][k].strip()), None)
+                if missing:
+                    s['phase'], s['awaiting'] = 'setup', missing
+                    s['setup'].append(dict(role='assistant', content=QUESTIONS[missing]))
+                    replies = [QUESTIONS[missing]]
+                else:
+                    s['phase'] = 'ready'
                     replies = [self.setup_summary(s)]
-                except Exception as exc:
-                    log_failure(event, s, 'setup', exc)
-                    replies = ['Не удалось разобрать описание. Напишите одним сообщением: что продаёте, кому и какого результата хотите достичь.']
-        s['updated_at'] = datetime.now(timezone.utc).isoformat()
-        self.store.save(s, event, replies, charge=charge)
-        return replies
+        self.store.commit(event, s, replies, counted=charge)
 
 
 def deliver(store, user_id, send):
