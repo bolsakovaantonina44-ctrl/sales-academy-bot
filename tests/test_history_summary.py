@@ -1,7 +1,7 @@
 import unittest
 
 from academy.domain import SKILLS
-from academy.engine import Engine
+from academy.engine import Engine, _display_customer
 
 
 class FakeStore:
@@ -21,7 +21,7 @@ class FakeStore:
                 'id': 8,
                 'card': {'role': 'client'},
                 'phase': 'active',
-                'fields': {'customer': 'Директор компании'},
+                'fields': {'customer': 'Раовшвщцл'},
                 'training_focus': 'no_need',
                 'report_data': None,
             },
@@ -42,13 +42,12 @@ class HistorySummaryTests(unittest.TestCase):
         text = engine.history_summary(10)
 
         self.assertIn('Бесплатные тренировки: использовано 2 из 3, осталось 1.', text)
-        self.assertIn('№7', text)
-        self.assertIn('Дорого', text)
-        self.assertIn('49/100', text)
-        self.assertIn('рабочая база', text)
-        self.assertIn('№8', text)
-        self.assertIn('Нам не надо', text)
-        self.assertIn('в процессе', text)
+        self.assertIn('Тренировка №7', text)
+        self.assertIn('Навык: Дорого', text)
+        self.assertIn('Результат: 49/100 · рабочая база', text)
+        self.assertIn('Тренировка №8', text)
+        self.assertIn('Навык: Нам не надо', text)
+        self.assertIn('Результат: в процессе', text)
         self.assertNotIn('completed', text)
         self.assertIn('/report НОМЕР', text)
 
@@ -57,6 +56,15 @@ class HistorySummaryTests(unittest.TestCase):
         text = engine.history_summary(10)
         self.assertIn('для администратора не применяется', text)
         self.assertNotIn('осталось 1', text)
+
+    def test_garbage_customer_is_not_echoed_in_history(self):
+        engine = Engine(FakeStore(), ai=object(), limit=3)
+        text = engine.history_summary(10)
+        self.assertNotIn('Раовшвщцл', text)
+        self.assertIn('Клиент: Некорректно указанный клиент', text)
+
+    def test_normal_customer_is_preserved(self):
+        self.assertEqual(_display_customer('Директор строительной компании'), 'Директор строительной компании')
 
 
 if __name__ == '__main__':
