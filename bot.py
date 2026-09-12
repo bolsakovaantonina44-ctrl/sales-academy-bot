@@ -13,9 +13,11 @@ from academy.store import Store
 from academy.domain import normalize_command, upgrade_session, chunks, is_finish_command
 from academy.diagnostics import log_failure
 from academy.pacing import FOCUS_OBJECTIONS
+from academy.access import PUBLIC, AKENSO, SUPERVISOR, get_role, set_role, has_company_access
 
 LOG = logging.getLogger('academy')
 FOCUS_LABELS = [v['label'] for v in FOCUS_OBJECTIONS.values()]
+ROLE_LABELS = {PUBLIC: 'Публичный', AKENSO: 'АКЕНСО', SUPERVISOR: 'Руководитель'}
 
 CONTROL_COMMANDS = {
     'начать тренировку', 'новая тренировка', 'завершить тренировку', 'заверши тренировку',
@@ -23,6 +25,7 @@ CONTROL_COMMANDS = {
     'повторить обработку', 'пропустить эту реплику', 'обновить разбор', 'посмотреть разбор',
     'скачать результат', 'сформировать отчет', 'отчет сотруднику', 'отчет руководителю',
     'показать скрытый сценарий', 'мои тренировки', 'сессии пользователей',
+    'доступ сотрудников', 'база знаний', 'аттестация',
     'изменить имя', 'сменить имя',
     'легкий', 'лёгкий', 'средний', 'сложный', '1', '2', '3',
 } | {normalize_command(label) for label in FOCUS_LABELS}
@@ -201,7 +204,6 @@ def _handle_lpr_gate(store, event):
         reply = 'Добрый день. Подскажите, по какому вопросу?'
         s['lpr_gate_turns'] = 1
     elif len(text.split()) >= 3 or stage >= 2:
-        # One clarification is enough: do not trap the manager in a secretary loop.
         reply = connect
         s['lpr_gate_passed'] = True
     else:
@@ -433,6 +435,62 @@ def main():
                 pass
         bot.send_message(chat_id, text, reply_markup=markup)
 
+    def latest_user_name(user_id):
+        with store.db() as db:
+            row = db.execute('SELECT payload FROM sessions WHERE user_id=? ORDER BY id DESC LIMIT 1', (int(user_id),)).fetchone()
+        if not row:
+            return f'TG {user_id}'
+        try:
+            s = upgrade_session(json.loads(row['payload']))
+            return s.get('employee', {}).get('name') or f'TG {user_id}'
+        except Exception:
+            return f'TG {user_id}'
+
+    def admin_access_page():
+        with store.db() as db:
+            rows = db.execute('''
+                SELECT user_id, MAX(id) AS last_id
+                FROM sessions
+                GROUP BY user_id
+                ORDER BY last_id DESC
+                LIMIT 30
+            ''').fetchall()
+        markup = telebot.types.InlineKeyboardMarkup(row_width=1)
+        for row in rows:
+            user_id = int(row['user_id'])
+            role = get_role(path, user_id)
+            name = latest_user_name(user_id)
+            markup.add(telebot.types.InlineKeyboardButton(
+                f"{name[:24]} · {ROLE_LABELS[role]}", callback_data=f'acc:user:{user_id}'
+            ))
+        text = ('ДОСТУП СОТРУДНИКОВ\n\n'
+                'Публичный — только тестовый тренажёр.\n'
+                'АКЕНСО — база знаний, аттестация и тренажёр.\n'
+                'Руководитель — корпоративный доступ руководителя.\n\n'
+                'Выберите пользователя:')
+        return text, markup
+
+    def access_user_card(user_id):
+        role = get_role(path, user_id)
+        name = latest_user_name(user_id)
+        text = f'ДОСТУП ПОЛЬЗОВАТЕЛЯ\n\n{name}\nTelegram ID: {user_id}\nТекущая роль: {ROLE_LABELS[role]}'
+        markup = telebot.types.InlineKeyboardMarkup(row_width=1)
+        markup.add(telebot.types.InlineKeyboardButton('Публичный', callback_data=f'acc:set:{user_id}:{PUBLIC}'))
+        markup.add(telebot.types.InlineKeyboardButton('Сотрудник АКЕНСО', callback_data=f'acc:set:{user_id}:{AKENSO}'))
+        markup.add(telebot.types.InlineKeyboardButton('Руководитель', callback_data=f'acc:set:{user_id}:{SUPERVISOR}'))
+        markup.add(telebot.types.InlineKeyboardButton('← К списку', callback_data='acc:list'))
+        return text, markup
+
+    def send_admin_access(chat_id, edit_message=None):
+        text, markup = admin_access_page()
+        if edit_message is not None:
+            try:
+                bot.edit_message_text(text, chat_id, edit_message, reply_markup=markup)
+                return
+            except Exception:
+                pass
+        bot.send_message(chat_id, text, reply_markup=markup)
+
     def send(chat_id, text):
         if str(text).startswith('__academy_pdf__:'):
             deliver_pdf(bot, store, chat_id, text, admins)
@@ -444,7 +502,12 @@ def main():
             else:
                 s = store.current(user_id)
                 markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
-                for row in keyboard_rows(s, bool(store.failed(user_id)), user_id in admins):
+                rows = keyboard_rows(s, bool(store.failed(user_id)), user_id in admins)
+                if s.get('phase') not in ('active', 'closed') and has_company_access(path, user_id):
+                    rows.append(['База знаний', 'Аттестация'])
+                if s.get('phase') not in ('active', 'closed') and user_id in admins:
+                    rows.append(['Доступ сотрудников'])
+                for row in rows:
                     markup.row(*[telebot.types.KeyboardButton(v) for v in row])
         except Exception:
             markup = None
@@ -457,11 +520,30 @@ def main():
 
     @bot.message_handler(content_types=['text'])
     def on_text(message):
-        if normalize_command(message.text or '') in ('/sessions', 'сессии пользователей'):
+        cmd = normalize_command(message.text or '')
+        if cmd in ('/sessions', 'сессии пользователей'):
             if message.chat.id in admins:
                 send_admin_sessions(message.chat.id, 0)
             else:
                 send(message.chat.id, 'Сессии пользователей доступны только администратору.')
+            return
+        if cmd in ('/access', 'доступ сотрудников'):
+            if message.chat.id in admins:
+                send_admin_access(message.chat.id)
+            else:
+                send(message.chat.id, 'Управление доступом доступно только администратору.')
+            return
+        if cmd == 'база знаний':
+            if has_company_access(path, message.chat.id):
+                send(message.chat.id, 'База знаний АКЕНСО — закрытый корпоративный раздел. Доступ подтверждён. Сейчас подключаем продуктовый модуль.')
+            else:
+                send(message.chat.id, 'База знаний доступна только сотрудникам подключённой компании.')
+            return
+        if cmd == 'аттестация':
+            if has_company_access(path, message.chat.id):
+                send(message.chat.id, 'Аттестация АКЕНСО — закрытый корпоративный раздел. Доступ подтверждён. Тесты появятся после подключения учебного модуля.')
+            else:
+                send(message.chat.id, 'Аттестация доступна только сотрудникам подключённой компании.')
             return
         receive_text(store, f'tg:{message.chat.id}:{message.message_id}', message.chat.id, message.chat.id,
                      'text', message.text or '', send)
@@ -500,10 +582,45 @@ def main():
                 deliver_pdf(bot, store, chat_id, f'__academy_pdf__:{session_id}:supervisor', admins)
                 return
             bot.answer_callback_query(call.id, 'Неизвестная команда.')
-        except Exception as exc:
+        except Exception:
             LOG.exception('Admin session callback failed')
             try:
                 bot.answer_callback_query(call.id, 'Не удалось открыть сессию.', show_alert=True)
+            except Exception:
+                pass
+
+    @bot.callback_query_handler(func=lambda call: str(call.data or '').startswith('acc:'))
+    def on_access_callback(call):
+        chat_id = call.message.chat.id
+        if chat_id not in admins:
+            bot.answer_callback_query(call.id, 'Доступно только администратору.', show_alert=True)
+            return
+        try:
+            parts = str(call.data).split(':')
+            action = parts[1]
+            if action == 'list':
+                send_admin_access(chat_id, call.message.message_id)
+                bot.answer_callback_query(call.id)
+                return
+            if action == 'user':
+                user_id = int(parts[2])
+                text, markup = access_user_card(user_id)
+                bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+                bot.answer_callback_query(call.id)
+                return
+            if action == 'set':
+                user_id = int(parts[2])
+                role = parts[3]
+                set_role(path, user_id, role)
+                text, markup = access_user_card(user_id)
+                bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+                bot.answer_callback_query(call.id, f'Роль: {ROLE_LABELS[role]}')
+                return
+            bot.answer_callback_query(call.id, 'Неизвестная команда.')
+        except Exception:
+            LOG.exception('Access callback failed')
+            try:
+                bot.answer_callback_query(call.id, 'Не удалось изменить доступ.', show_alert=True)
             except Exception:
                 pass
 
