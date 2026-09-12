@@ -1,5 +1,5 @@
 """Compact Telegram report rendering. Evidence stays in structured data/PDF, not chat walls."""
-from .domain import SKILLS
+from .domain import SKILLS, score_level
 from .reporting import fallback_data, recommended_training_cases
 
 
@@ -19,7 +19,7 @@ def render_report(data, session, include_hidden=False):
     elif not data['simulation_valid']:
         lines += ['Симуляция требует проверки. Итоговый балл не используется для аттестации.']
     elif maximum == 100:
-        lines += [f'Навыки: {earned}/100']
+        lines += [f'Навыки: {earned}/100', f'Уровень: {score_level(earned)}']
     else:
         lines += [f'По наблюдаемым навыкам: {earned}/{maximum}.']
 
