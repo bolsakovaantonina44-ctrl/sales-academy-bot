@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 
@@ -10,4 +11,6 @@ def run(*args):
 if __name__ == '__main__':
     run('-m', 'unittest', 'discover', '-s', 'tests')
     run('-u', 'tests/smoke_mvp.py')
+    if os.getenv('GOLDEN_GATE') == '1':
+        run('-u', 'tests/golden_ai.py')
     print('PREDEPLOY_PASS', flush=True)
