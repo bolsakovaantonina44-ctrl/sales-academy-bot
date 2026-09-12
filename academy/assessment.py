@@ -73,13 +73,18 @@ def answer(path, user_id, answer_index):
         if next_index < current["total"]:
             db.execute("UPDATE active_assessments SET question_index=?,answers_json=?,updated_at=? WHERE user_id=?",
                        (next_index, json.dumps(answers), _now(), int(user_id)))
-            return {"finished": False, "question": question(path, user_id)}
-
-        correct = sum(
-            int(value == item["correct"])
-            for value, item in zip(answers, QUESTION_BANK[current["module_id"]])
-        )
-        result = record_assessment(path, user_id, current["module_id"], answers, correct, current["total"], PASS_PERCENT)
-        db.execute("DELETE FROM active_assessments WHERE user_id=?", (int(user_id),))
-        result.update(finished=True)
-        return result
+            finished = False
+            result = None
+        else:
+            correct = sum(
+                int(value == item["correct"])
+                for value, item in zip(answers, QUESTION_BANK[current["module_id"]])
+            )
+            result = record_assessment(path, user_id, current["module_id"], answers, correct, current["total"], PASS_PERCENT)
+            db.execute("DELETE FROM active_assessments WHERE user_id=?", (int(user_id),))
+            result.update(finished=True)
+            finished = True
+    # The transaction must close before question() opens its own read connection.
+    if not finished:
+        return {"finished": False, "question": question(path, user_id)}
+    return result
