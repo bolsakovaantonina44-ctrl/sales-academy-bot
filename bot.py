@@ -14,6 +14,9 @@ from academy.domain import normalize_command, upgrade_session, chunks, is_finish
 from academy.diagnostics import log_failure
 from academy.pacing import FOCUS_OBJECTIONS
 from academy.access import PUBLIC, AKENSO, SUPERVISOR, get_role, set_role, has_company_access
+from academy.curriculum import MODULE_CONTENT
+from academy.learning import progress_snapshot
+from academy import assessment
 
 LOG = logging.getLogger('academy')
 FOCUS_LABELS = [v['label'] for v in FOCUS_OBJECTIONS.values()]
@@ -491,6 +494,47 @@ def main():
                 pass
         bot.send_message(chat_id, text, reply_markup=markup)
 
+    def learning_home(chat_id, section='knowledge', edit_message=None):
+        snapshot = {item['id']: item for item in progress_snapshot(path, chat_id)}
+        markup = telebot.types.InlineKeyboardMarkup(row_width=1)
+        header = 'БАЗА ЗНАНИЙ АКЕНСО' if section == 'knowledge' else 'АТТЕСТАЦИЯ АКЕНСО'
+        lines = [header, '', 'Выберите модуль:' if section == 'knowledge' else 'Выберите модуль для короткой проверки знаний:']
+        for module_id, item in MODULE_CONTENT.items():
+            latest = snapshot[module_id].get('latest_assessment')
+            status = 'не начат'
+            if latest:
+                status = f"последняя попытка: {latest['score']}%"
+            elif snapshot[module_id]['status'] == 'in_progress':
+                status = 'в процессе'
+            prefix = '📘' if section == 'knowledge' else '📝'
+            action = 'read' if section == 'knowledge' else 'start'
+            markup.add(telebot.types.InlineKeyboardButton(
+                f"{prefix} {item['title']} · {status}", callback_data=f"learn:{action}:{module_id}"
+            ))
+        lines += ['', 'Проходной результат аттестации — 80%. Последняя попытка сохраняется.']
+        text = '\n'.join(lines)
+        if edit_message is not None:
+            bot.edit_message_text(text, chat_id, edit_message, reply_markup=markup)
+        else:
+            bot.send_message(chat_id, text, reply_markup=markup)
+
+    def learning_module(chat_id, module_id, edit_message):
+        item = MODULE_CONTENT[module_id]
+        markup = telebot.types.InlineKeyboardMarkup(row_width=1)
+        markup.add(telebot.types.InlineKeyboardButton('📝 Пройти аттестацию', callback_data=f'learn:start:{module_id}'))
+        markup.add(telebot.types.InlineKeyboardButton('← К модулям', callback_data='learn:home:knowledge'))
+        bot.edit_message_text(item['body'], chat_id, edit_message, reply_markup=markup)
+
+    def assessment_question(chat_id, question, edit_message):
+        markup = telebot.types.InlineKeyboardMarkup(row_width=1)
+        for index, option in enumerate(question['options']):
+            markup.add(telebot.types.InlineKeyboardButton(
+                option, callback_data=f"learn:answer:{question['module_id']}:{question['index']}:{index}"
+            ))
+        text = (f"АТТЕСТАЦИЯ · {MODULE_CONTENT[question['module_id']]['title']}\n"
+                f"Вопрос {question['index'] + 1} из {question['total']}\n\n{question['question']}")
+        bot.edit_message_text(text, chat_id, edit_message, reply_markup=markup)
+
     def send(chat_id, text):
         if str(text).startswith('__academy_pdf__:'):
             deliver_pdf(bot, store, chat_id, text, admins)
@@ -535,18 +579,62 @@ def main():
             return
         if cmd == 'база знаний':
             if has_company_access(path, message.chat.id):
-                send(message.chat.id, 'База знаний АКЕНСО — закрытый корпоративный раздел. Доступ подтверждён. Сейчас подключаем продуктовый модуль.')
+                learning_home(message.chat.id, 'knowledge')
             else:
                 send(message.chat.id, 'База знаний доступна только сотрудникам подключённой компании.')
             return
         if cmd == 'аттестация':
             if has_company_access(path, message.chat.id):
-                send(message.chat.id, 'Аттестация АКЕНСО — закрытый корпоративный раздел. Доступ подтверждён. Тесты появятся после подключения учебного модуля.')
+                learning_home(message.chat.id, 'assessment')
             else:
                 send(message.chat.id, 'Аттестация доступна только сотрудникам подключённой компании.')
             return
         receive_text(store, f'tg:{message.chat.id}:{message.message_id}', message.chat.id, message.chat.id,
                      'text', message.text or '', send)
+
+    @bot.callback_query_handler(func=lambda call: str(call.data or '').startswith('learn:'))
+    def on_learning_callback(call):
+        chat_id = call.message.chat.id
+        if not has_company_access(path, chat_id):
+            bot.answer_callback_query(call.id, 'Раздел доступен только сотрудникам компании.', show_alert=True)
+            return
+        try:
+            parts = str(call.data).split(':')
+            action = parts[1]
+            if action == 'home':
+                learning_home(chat_id, parts[2], call.message.message_id)
+            elif action == 'read':
+                learning_module(chat_id, parts[2], call.message.message_id)
+            elif action == 'start':
+                question = assessment.start(path, chat_id, parts[2])
+                assessment_question(chat_id, question, call.message.message_id)
+            elif action == 'answer':
+                current = assessment.question(path, chat_id)
+                if not current or current['module_id'] != parts[2] or str(current['index']) != parts[3]:
+                    bot.answer_callback_query(call.id, 'Этот вопрос уже обновлён. Откройте аттестацию снова.', show_alert=True)
+                    return
+                result = assessment.answer(path, chat_id, int(parts[4]))
+                if result['finished']:
+                    verdict = 'пройдена' if result['passed'] else 'пока не пройдена'
+                    text = (f"АТТЕСТАЦИЯ {verdict.upper()}\n\n"
+                            f"Результат: {result['correct']} из {result['total']} · {result['score']}%\n"
+                            f"Проходной порог: 80%.\n\n"
+                            + ('Модуль отмечен как пройденный.' if result['passed'] else 'Повторите модуль и попробуйте ещё раз.'))
+                    markup = telebot.types.InlineKeyboardMarkup(row_width=1)
+                    markup.add(telebot.types.InlineKeyboardButton('← К аттестациям', callback_data='learn:home:assessment'))
+                    bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+                else:
+                    assessment_question(chat_id, result['question'], call.message.message_id)
+            else:
+                bot.answer_callback_query(call.id, 'Неизвестная команда.', show_alert=True)
+                return
+            bot.answer_callback_query(call.id)
+        except Exception:
+            LOG.exception('Learning callback failed')
+            try:
+                bot.answer_callback_query(call.id, 'Не удалось открыть учебный модуль. Попробуйте ещё раз.', show_alert=True)
+            except Exception:
+                pass
 
     @bot.callback_query_handler(func=lambda call: str(call.data or '').startswith('adm:'))
     def on_admin_callback(call):
