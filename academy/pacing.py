@@ -40,7 +40,6 @@ FOCUS_OBJECTIONS = {
 def prepare_card(card, difficulty, focus=None):
     card = copy.deepcopy(card)
     count = {'easy': 1, 'medium': 2, 'hard': 3}[difficulty]
-    # Existing template barriers keep their meaning but become spoken objections.
     spoken = {
         'comparable': 'У других дешевле.',
         'time': 'Сейчас нет времени на презентацию.',
@@ -49,14 +48,11 @@ def prepare_card(card, difficulty, focus=None):
     }
     for b in card['barriers']:
         b['text'] = spoken.get(b['id'], b['text'])
-
-    # A selected training focus is deterministic: the trainee must encounter it.
     if focus in FOCUS_OBJECTIONS:
         selected = FOCUS_OBJECTIONS[focus]
         focused = dict(id='focus_' + focus, text=selected['text'], resolved_when=selected['resolved_when'])
         card['barriers'] = [focused] + [b for b in card['barriers'] if b['id'] != focused['id']
                                             and b['text'].strip().lower() != focused['text'].strip().lower()]
-
     additions = [
         ('attention', 'Пришлите информацию, я посмотрю.',
          'Менеджер выяснил актуальность и согласовал содержательный повод продолжения, а не просто согласился прислать презентацию.'),
@@ -77,12 +73,22 @@ def prepare_card(card, difficulty, focus=None):
     return card
 
 
+def _barrier_has_context(barrier, session, plan, substantive):
+    """Some objections only make sense after the manager has given the client something to react to."""
+    if barrier.get('id') != 'focus_price':
+        return True
+    # A price/value objection before any offer context sounds artificial ("what is it? expensive").
+    # On hard it may appear quickly, but only after a presentation/value/price-related move.
+    if plan.get('action') in ('monologue', 'relevant_argument', 'objection_work'):
+        return True
+    return substantive >= 2
+
+
 def apply_behavior(session, plan, state):
     """Never manufacture agreement; schedule barriers and a natural ending."""
     old = session['state']
     barriers = session['card']['barriers']
     shown = set(old.get('presented_barriers', []))
-    # A barrier cannot silently disappear before the trainee encounters it.
     state['resolved'] = [i for i in state['resolved'] if i in shown]
     for b in barriers:
         if b['id'] not in state['resolved'] and state['issues'].get(b['id']) == 'resolved':
@@ -95,21 +101,16 @@ def apply_behavior(session, plan, state):
         state['interest'] = max(0, old['interest'] - 1)
     elif action in ('reflection', 'relevant_argument', 'objection_work'):
         state['trust'] = min(5, old['trust'] + 1)
-    # Information must be earned, one new fact at a time.
     fresh = [i for i in plan['reveal_ids'] if i not in old['revealed']]
     permitted = fresh[:1] if action in ('question', 'reflection', 'objection_work') and plan['intent'] != 'name' else []
     state['revealed'] = sorted(set(old['revealed']) | set(permitted))
     state['required_objection'] = ''
     state['required_objection_id'] = ''
     unseen = [b for b in barriers if b['id'] not in shown]
-    # A focused exercise must not end before the selected objection is ever spoken.
-    # The manager should get at least one real opportunity to handle the trained skill.
     if state['close'] == 'refusal' and unseen:
         state['close'] = 'continue'
         state['agreement'] = old.get('agreement', '')
         state['ending_reason'] = ''
-    # Easy gives room to establish contact. Medium introduces resistance quickly.
-    # Hard keeps pressure throughout the conversation.
     schedule = {
         'easy': (3,),
         'medium': (1, 4),
@@ -118,11 +119,12 @@ def apply_behavior(session, plan, state):
     due = schedule[min(len(shown), len(schedule) - 1)]
     if unseen and substantive >= due and plan['intent'] != 'name' and state['close'] in ('continue', 'success'):
         b = unseen[0]
-        state['required_objection'], state['required_objection_id'] = b['text'], b['id']
-        state['issues'][b['id']] = 'open'
-        state['focus_issue_id'] = b['id']
-        state['suppress_issue_repeat'] = False
-        shown.add(b['id'])
+        if _barrier_has_context(b, session, plan, substantive):
+            state['required_objection'], state['required_objection_id'] = b['text'], b['id']
+            state['issues'][b['id']] = 'open'
+            state['focus_issue_id'] = b['id']
+            state['suppress_issue_repeat'] = False
+            shown.add(b['id'])
     state['presented_barriers'] = sorted(shown)
     if state['close'] == 'success' and (state['required_objection'] or len(shown) < len(barriers)
                                        or len(state['resolved']) < len(barriers)):
