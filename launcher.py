@@ -3,6 +3,7 @@
 The inline callback viewer is kept, but admins also get a text-button fallback.
 This avoids Telegram client callback quirks: session buttons send ordinary text
 (`Сессия 15`), which is intercepted before it can enter the sales simulation.
+Admins can also open the full transcript and replay stored Telegram voice messages.
 """
 import functools
 import json
@@ -10,6 +11,7 @@ import logging
 import os
 import re
 import sqlite3
+from collections import Counter
 
 import telebot
 
@@ -139,7 +141,7 @@ def _send_sessions(bot_client, chat_id, page=0):
     lines = [
         "СЕССИИ ПОЛЬЗОВАТЕЛЕЙ",
         f"Показаны {start}–{end} из {total}.",
-        "Теперь кнопки ниже — обычные Telegram-кнопки, без callback.",
+        "Выберите сессию кнопкой ниже.",
         "",
     ]
     lines.extend(_session_label(row) for row in rows)
@@ -148,6 +150,36 @@ def _send_sessions(bot_client, chat_id, page=0):
         "\n".join(lines),
         reply_markup=_sessions_markup(rows, page, total, page_size),
     )
+
+
+def _voice_rows_for_session(session_id):
+    """Recover original Telegram voice file_ids by matching stored transcripts to this session."""
+    row, session = _load_session(session_id)
+    if not row or not session:
+        return []
+    manager_lines = [
+        str(item.get("content", "")).strip()
+        for item in (session.get("history") or [])
+        if item.get("role") == "user" and str(item.get("content", "")).strip()
+    ]
+    remaining = Counter(manager_lines)
+    if not remaining:
+        return []
+    with sqlite3.connect(_db_path()) as db:
+        db.row_factory = sqlite3.Row
+        candidates = db.execute(
+            "SELECT id,text,raw_text FROM inbox "
+            "WHERE user_id=? AND raw_text IS NOT NULL AND text IS NOT NULL AND raw_text<>text "
+            "ORDER BY id",
+            (row["user_id"],),
+        ).fetchall()
+    matched = []
+    for item in candidates:
+        transcript = str(item["text"] or "").strip()
+        if remaining[transcript] > 0:
+            matched.append(item)
+            remaining[transcript] -= 1
+    return matched
 
 
 def _session_card(session_id):
@@ -161,6 +193,7 @@ def _session_card(session_id):
     score = _score(session)
     identity = (session.get("card") or {}).get("identity", {})
     focus = session.get("training_focus") or "не указан"
+    voices = _voice_rows_for_session(session_id)
     lines = [
         f"СЕССИЯ #{session_id}",
         f"Пользователь: {employee}",
@@ -179,12 +212,16 @@ def _session_card(session_id):
         if bits:
             lines.append("Карточка клиента: " + " · ".join(bits))
     lines.append(f"Реплик в диалоге: {len(session.get('history') or [])}")
+    lines.append(f"Сохранённых голосовых менеджера: {len(voices)}")
     return "\n".join(lines)
 
 
 def _session_markup(session_id):
     markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row(telebot.types.KeyboardButton(f"Диалог {session_id}"))
+    markup.row(
+        telebot.types.KeyboardButton(f"Диалог {session_id}"),
+        telebot.types.KeyboardButton(f"Голосовые {session_id}"),
+    )
     markup.row(telebot.types.KeyboardButton("Сессии пользователей"))
     markup.row(telebot.types.KeyboardButton("Мои тренировки"))
     return markup
@@ -224,6 +261,42 @@ def _send_dialog(bot_client, chat_id, session_id):
     bot_client.send_message(chat_id, parts[-1], reply_markup=_session_markup(session_id))
 
 
+def _send_voices(bot_client, chat_id, session_id):
+    row, session = _load_session(session_id)
+    if not row:
+        bot_client.send_message(chat_id, "Сессия не найдена.")
+        return
+    voices = _voice_rows_for_session(session_id)
+    if not voices:
+        bot_client.send_message(
+            chat_id,
+            f"Сессия #{session_id}: сохранённых голосовых менеджера не найдено. "
+            "Если менеджер писал текстом, весь разговор доступен через «Диалог».\n"
+            "Для старых голосовых воспроизведение возможно только когда сохранился исходный Telegram file_id.",
+            reply_markup=_session_markup(session_id),
+        )
+        return
+    bot_client.send_message(chat_id, f"ГОЛОСОВЫЕ СЕССИИ #{session_id}: {len(voices)} шт.")
+    sent = 0
+    for index, voice in enumerate(voices, 1):
+        transcript = str(voice["text"] or "").strip()
+        caption = f"Голосовое {index}/{len(voices)}"
+        if transcript:
+            excerpt = transcript if len(transcript) <= 700 else transcript[:697] + "…"
+            caption += f"\nРасшифровка: {excerpt}"
+        try:
+            bot_client.send_voice(chat_id, voice["raw_text"], caption=caption)
+            sent += 1
+        except Exception as exc:
+            LOG.warning("Voice replay failed session=%s inbox_id=%s kind=%s", session_id, voice["id"], type(exc).__name__)
+            bot_client.send_message(chat_id, caption + "\n⚠️ Оригинал аудио уже недоступен Telegram.")
+    bot_client.send_message(
+        chat_id,
+        f"Готово. Воспроизведено голосовых: {sent} из {len(voices)}.",
+        reply_markup=_session_markup(session_id),
+    )
+
+
 def _handle_admin_text(bot_client, message):
     if message.chat.id not in _admin_ids():
         return False
@@ -244,6 +317,11 @@ def _handle_admin_text(bot_client, message):
     match = re.fullmatch(r"диалог\s+#?\s*(\d+)", normalized)
     if match:
         _send_dialog(bot_client, message.chat.id, int(match.group(1)))
+        return True
+
+    match = re.fullmatch(r"голосов(?:ые|ая|ое)?\s+#?\s*(\d+)", normalized)
+    if match:
+        _send_voices(bot_client, message.chat.id, int(match.group(1)))
         return True
 
     match = re.fullmatch(r"страница\s+(\d+)\s*▶?️?", normalized)
