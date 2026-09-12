@@ -17,6 +17,7 @@ from academy.access import PUBLIC, AKENSO, SUPERVISOR, get_role, set_role, has_c
 from academy.curriculum import MODULE_CONTENT
 from academy.learning import progress_snapshot
 from academy import assessment
+from academy import admission
 
 LOG = logging.getLogger('academy')
 FOCUS_LABELS = [v['label'] for v in FOCUS_OBJECTIONS.values()]
@@ -511,7 +512,9 @@ def main():
             markup.add(telebot.types.InlineKeyboardButton(
                 f"{prefix} {item['title']} · {status}", callback_data=f"learn:{action}:{module_id}"
             ))
-        lines += ['', 'Проходной результат аттестации — 80%. Последняя попытка сохраняется.']
+        if section == 'assessment':
+            markup.add(telebot.types.InlineKeyboardButton('📊 Итоговый допуск', callback_data='learn:admission'))
+        lines += ['', 'Проходной результат каждого теста — 80%. Итоговый балл допуска формируется после трёх модулей по шкале 0–10; минимальный допуск — 7,0.']
         text = '\n'.join(lines)
         if edit_message is not None:
             bot.edit_message_text(text, chat_id, edit_message, reply_markup=markup)
@@ -524,6 +527,30 @@ def main():
         markup.add(telebot.types.InlineKeyboardButton('📝 Пройти аттестацию', callback_data=f'learn:start:{module_id}'))
         markup.add(telebot.types.InlineKeyboardButton('← К модулям', callback_data='learn:home:knowledge'))
         bot.edit_message_text(item['body'], chat_id, edit_message, reply_markup=markup)
+
+    def learning_admission(chat_id, edit_message=None):
+        result = admission.assess(path, chat_id)
+        text = admission.employee_text(result)
+        markup = telebot.types.InlineKeyboardMarkup(row_width=1)
+        markup.add(telebot.types.InlineKeyboardButton('← К аттестациям', callback_data='learn:home:assessment'))
+        if edit_message is not None:
+            bot.edit_message_text(text, chat_id, edit_message, reply_markup=markup)
+        else:
+            bot.send_message(chat_id, text, reply_markup=markup)
+        return result
+
+    def notify_supervisors(user_id, result):
+        if not result['complete']:
+            return
+        employee_name = latest_user_name(user_id)
+        text = admission.supervisor_text(employee_name, result)
+        for admin_id in admins:
+            if int(admin_id) == int(user_id):
+                continue
+            try:
+                bot.send_message(admin_id, text)
+            except Exception:
+                LOG.exception('Could not deliver admission report admin=%s user=%s', admin_id, user_id)
 
     def assessment_question(chat_id, question, edit_message):
         markup = telebot.types.InlineKeyboardMarkup(row_width=1)
@@ -608,6 +635,8 @@ def main():
             elif action == 'start':
                 question = assessment.start(path, chat_id, parts[2])
                 assessment_question(chat_id, question, call.message.message_id)
+            elif action == 'admission':
+                learning_admission(chat_id, call.message.message_id)
             elif action == 'answer':
                 current = assessment.question(path, chat_id)
                 if not current or current['module_id'] != parts[2] or str(current['index']) != parts[3]:
@@ -623,6 +652,10 @@ def main():
                     markup = telebot.types.InlineKeyboardMarkup(row_width=1)
                     markup.add(telebot.types.InlineKeyboardButton('← К аттестациям', callback_data='learn:home:assessment'))
                     bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+                    overall = admission.assess(path, chat_id)
+                    if overall['complete']:
+                        bot.send_message(chat_id, admission.employee_text(overall))
+                        notify_supervisors(chat_id, overall)
                 else:
                     assessment_question(chat_id, result['question'], call.message.message_id)
             else:
