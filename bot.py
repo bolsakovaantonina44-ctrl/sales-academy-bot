@@ -29,7 +29,7 @@ CONTROL_COMMANDS = {
     'повторить обработку', 'пропустить эту реплику', 'обновить разбор', 'посмотреть разбор',
     'скачать результат', 'сформировать отчет', 'отчет сотруднику', 'отчет руководителю',
     'показать скрытый сценарий', 'мои тренировки', 'сессии пользователей',
-    'доступ сотрудников', 'база знаний', 'аттестация',
+    'доступ сотрудников', 'прогресс команды', 'база знаний', 'аттестация',
     'изменить имя', 'сменить имя',
     'легкий', 'лёгкий', 'средний', 'сложный', '1', '2', '3',
 } | {normalize_command(label) for label in FOCUS_LABELS}
@@ -495,6 +495,53 @@ def main():
                 pass
         bot.send_message(chat_id, text, reply_markup=markup)
 
+    def team_progress_page(edit_message=None):
+        with store.db() as db:
+            rows = db.execute("""
+                SELECT user_id,role FROM user_access
+                WHERE role IN (?,?)
+                ORDER BY updated_at DESC
+            """, (AKENSO, SUPERVISOR)).fetchall()
+        lines = ['ПРОГРЕСС КОМАНДЫ', '']
+        markup = telebot.types.InlineKeyboardMarkup(row_width=1)
+        if not rows:
+            lines.append('Пока нет сотрудников с корпоративным доступом. Назначьте роль в разделе «Доступ сотрудников».')
+        for row in rows:
+            user_id = int(row['user_id'])
+            name = latest_user_name(user_id)
+            result = admission.assess(path, user_id)
+            if result['complete']:
+                status = f"{result['grade']:.1f}/10 · {result['decision']}"
+            elif result['scores']:
+                status = f"{len(result['scores'])}/3 теста"
+            else:
+                status = 'не начал'
+            lines.append(f"• {name}: {status}")
+            markup.add(telebot.types.InlineKeyboardButton(
+                f"{name[:24]} · {status[:32]}", callback_data=f"team:user:{user_id}"
+            ))
+        markup.add(telebot.types.InlineKeyboardButton('↻ Обновить', callback_data='team:list'))
+        text = '\n'.join(lines)
+        if edit_message is None:
+            bot.send_message(next(iter(admins)), text, reply_markup=markup)
+        else:
+            bot.edit_message_text(text, next(iter(admins)), edit_message, reply_markup=markup)
+
+    def team_member_card(user_id, edit_message):
+        result = admission.assess(path, user_id)
+        name = latest_user_name(user_id)
+        text = admission.supervisor_text(name, result)
+        markup = telebot.types.InlineKeyboardMarkup(row_width=1)
+        markup.add(telebot.types.InlineKeyboardButton('📨 Отправить сотруднику маршрут', callback_data=f'team:send:{user_id}'))
+        markup.add(telebot.types.InlineKeyboardButton('← К прогрессу команды', callback_data='team:list'))
+        bot.edit_message_text(text, next(iter(admins)), edit_message, reply_markup=markup)
+
+    def send_employee_route(user_id):
+        result = admission.assess(path, user_id)
+        text = ('ВАШ УЧЕБНЫЙ МАРШРУТ\n\n' + admission.employee_text(result) +
+                '\n\nСледующий шаг: откройте «Аттестация» или выберите тренировку по слабому навыку.')
+        bot.send_message(user_id, text)
+
     def learning_home(chat_id, section='knowledge', edit_message=None):
         snapshot = {item['id']: item for item in progress_snapshot(path, chat_id)}
         markup = telebot.types.InlineKeyboardMarkup(row_width=1)
@@ -577,7 +624,7 @@ def main():
                 if s.get('phase') not in ('active', 'closed') and has_company_access(path, user_id):
                     rows.append(['База знаний', 'Аттестация'])
                 if s.get('phase') not in ('active', 'closed') and user_id in admins:
-                    rows.append(['Доступ сотрудников'])
+                    rows.append(['Доступ сотрудников', 'Прогресс команды'])
                 for row in rows:
                     markup.row(*[telebot.types.KeyboardButton(v) for v in row])
         except Exception:
@@ -604,6 +651,12 @@ def main():
             else:
                 send(message.chat.id, 'Управление доступом доступно только администратору.')
             return
+        if cmd in ('/team', 'прогресс команды'):
+            if message.chat.id in admins:
+                team_progress_page()
+            else:
+                send(message.chat.id, 'Прогресс команды доступен только руководителю.')
+            return
         if cmd == 'база знаний':
             if has_company_access(path, message.chat.id):
                 learning_home(message.chat.id, 'knowledge')
@@ -618,6 +671,34 @@ def main():
             return
         receive_text(store, f'tg:{message.chat.id}:{message.message_id}', message.chat.id, message.chat.id,
                      'text', message.text or '', send)
+
+    @bot.callback_query_handler(func=lambda call: str(call.data or '').startswith('team:'))
+    def on_team_callback(call):
+        chat_id = call.message.chat.id
+        if chat_id not in admins:
+            bot.answer_callback_query(call.id, 'Доступно только руководителю.', show_alert=True)
+            return
+        try:
+            parts = str(call.data).split(':')
+            action = parts[1]
+            if action == 'list':
+                team_progress_page(call.message.message_id)
+            elif action == 'user':
+                team_member_card(int(parts[2]), call.message.message_id)
+            elif action == 'send':
+                send_employee_route(int(parts[2]))
+                bot.answer_callback_query(call.id, 'Маршрут отправлен сотруднику.')
+                return
+            else:
+                bot.answer_callback_query(call.id, 'Неизвестная команда.', show_alert=True)
+                return
+            bot.answer_callback_query(call.id)
+        except Exception:
+            LOG.exception('Team progress callback failed')
+            try:
+                bot.answer_callback_query(call.id, 'Не удалось открыть прогресс.', show_alert=True)
+            except Exception:
+                pass
 
     @bot.callback_query_handler(func=lambda call: str(call.data or '').startswith('learn:'))
     def on_learning_callback(call):
