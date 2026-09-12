@@ -5,6 +5,7 @@ changing simulation, scoring, persistence, Telegram, or OpenAI behavior.
 No prompts, message text, tokens, or secrets are written to telemetry logs.
 """
 import logging
+import re
 import time
 
 from academy.ai import AI
@@ -111,8 +112,24 @@ def install():
 install()
 
 # launcher.py keeps the existing production patches/admin tools. Import it after
-# telemetry patches are installed, then explicitly enter the real bot main loop.
+# telemetry patches are installed.
 import launcher  # noqa: E402
+
+# Admin session navigation historically accepted a bare number such as "22".
+# That conflicts with the trainer's difficulty buttons 1/2/3 for admins: "2"
+# was being interpreted as "open session #2". Bare numbers must always continue
+# to the trainer; admin sessions remain available via "Сессия 22" or "#22".
+_original_admin_text = launcher._handle_admin_text
+
+
+def _safe_admin_text(bot_client, message):
+    raw = (getattr(message, "text", None) or "").strip()
+    if re.fullmatch(r"\d+", raw):
+        return False
+    return _original_admin_text(bot_client, message)
+
+
+launcher._handle_admin_text = _safe_admin_text
 
 
 if __name__ == "__main__":
