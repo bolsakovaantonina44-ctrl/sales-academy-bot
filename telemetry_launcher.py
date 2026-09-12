@@ -110,5 +110,10 @@ def install():
 
 install()
 
-# launcher.py remains the production compatibility/admin launcher and calls bot.main().
-import launcher  # noqa: E402,F401
+# launcher.py keeps the existing production patches/admin tools. Import it after
+# telemetry patches are installed, then explicitly enter the real bot main loop.
+import launcher  # noqa: E402
+
+
+if __name__ == "__main__":
+    launcher.bot.main()
