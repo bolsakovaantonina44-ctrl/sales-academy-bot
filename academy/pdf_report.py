@@ -8,7 +8,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether, PageBreak
-from .domain import SKILLS
+from .domain import SKILLS, score_level
 from .reporting import total_score, supervisor_recommendation, recommended_training_cases
 from .pacing import FOCUS_OBJECTIONS
 
@@ -69,6 +69,8 @@ def render_pdf(session, audience='employee'):
     story.append(table)
 
     story.append(p('Навыки: ' + (f'{score}/100' if score is not None else 'балл недоступен'), heading))
+    if score is not None:
+        story.append(p('Уровень: ' + score_level(score), verdict_style))
     if data.get('technical_partial'):
         story.append(p('Технический сбой оценки. Баллы не выставлены; это не 0/100.'))
     elif not data['simulation_valid']:
@@ -119,14 +121,14 @@ def render_pdf(session, audience='employee'):
             story.append(p('Зоны роста', heading))
             story += [p('• ' + x['text']) for x in data['mistakes'][:2]]
         if data.get('recommendations'):
-            story.append(p('Что делать с сотрудником', heading))
+            story.append(p('Что отработать дальше', heading))
             story += [p(f'{i}. {task["exercise"]}') for i, task in enumerate(data['recommendations'][:2], 1)]
             story.append(p('Что проверить на повторной тренировке', heading))
             story += [p('• ' + task['success_check']) for task in data['recommendations'][:2]]
         training_cases = recommended_training_cases(data, session)
         if training_cases:
             story.append(p('Как использовать тренажёр дальше', heading))
-            story.append(p('Рекомендуется назначить сотруднику следующие повторные тренировки:'))
+            story.append(p('Рекомендуется назначить следующие повторные тренировки:'))
             story += [p(f'{i}. {case}') for i, case in enumerate(training_cases, 1)]
 
         previous = session.get('comparison')
@@ -135,7 +137,7 @@ def render_pdf(session, audience='employee'):
             story.append(p(f"Тренировка №{previous['session_id']}: {previous['score']}/100 → {score}/100 ({score - previous['score']:+d})."))
             story.append(p('Это сравнение учебных сессий, а не окончательный вывод о сотруднике.', small))
         else:
-            story.append(p('Пока нет сопоставимой тренировки. Обучаемость оцениваем только по повторной попытке.'))
+            story.append(p('Пока нет сопоставимой тренировки. Динамику оцениваем после повторной попытки в сопоставимом сценарии.'))
 
         story.append(p('Кратко по 8 навыкам', heading))
         for key, skill_label, maximum in SKILLS:
@@ -145,7 +147,7 @@ def render_pdf(session, audience='employee'):
             story.append(p(f"{skill_label}: {value}/{maximum if value is not None else ''} — {short_reason}" if value is not None
                            else f"{skill_label}: недоступно — {short_reason}"))
 
-    story += [Spacer(1, 14), p('Учебная диагностика. Решение о найме и обучаемости подтверждается несколькими сопоставимыми тренировками.', small)]
+    story += [Spacer(1, 14), p('Учебная диагностика. Выводы о динамике подтверждаются несколькими сопоставимыми тренировками.', small)]
 
     def footer(canvas, document):
         canvas.setFont('Academy', 8.5)
