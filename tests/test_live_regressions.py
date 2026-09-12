@@ -54,22 +54,26 @@ class LiveRegressions(unittest.TestCase):
     def test_repeated_finish_taps_are_coalesced_while_report_is_working(self):
         self.talk()
         received = []
-        self.assertTrue(receive_text(self.store, 'finish1', 10, 10, 'text', 'Завершить тренировку',
-                                     lambda c, t: received.append(t)))
+        self.assertTrue(receive_text(self.store, 'finish1', 10, 10, 'text', 'Завершить тренировку', lambda c, t: received.append(t)))
         event = self.store.claim()
-        self.assertFalse(receive_text(self.store, 'finish2', 10, 10, 'text', 'Завершить тренировку',
-                                      lambda c, t: received.append(t)))
-        self.assertFalse(receive_text(self.store, 'finish3', 10, 10, 'text', '/finish',
-                                      lambda c, t: received.append(t)))
+        self.assertFalse(receive_text(self.store, 'finish2', 10, 10, 'text', 'Завершить тренировку', lambda c, t: received.append(t)))
+        self.assertFalse(receive_text(self.store, 'finish3', 10, 10, 'text', '/finish', lambda c, t: received.append(t)))
         self.assertEqual(received[0], 'Завершаю тренировку. Готовлю разбор — это может занять около 1 минуты…')
-        self.assertEqual(received[1:], [
-            'Разбор уже формируется. Повторно нажимать «Завершить тренировку» не нужно.',
-            'Разбор уже формируется. Повторно нажимать «Завершить тренировку» не нужно.',
-        ])
+        self.assertEqual(received[1:], ['Разбор уже формируется. Повторно нажимать «Завершить тренировку» не нужно.', 'Разбор уже формируется. Повторно нажимать «Завершить тренировку» не нужно.'])
         self.engine.handle(event)
         bodies = [item['body'] for item in self.store.outgoing(10)]
         self.assertEqual(sum(body.startswith('РЕЗУЛЬТАТ ТРЕНИРОВКИ') for body in bodies), 1)
         self.assertEqual(sum(body.startswith('__academy_pdf__:') for body in bodies), 1)
+
+    def test_price_objection_waits_for_offer_context(self):
+        s = session_empty(); s['fields']['difficulty'] = 'hard'
+        s['card'] = prepare_card(template('1')['card'], 'hard', 'price')
+        first = core.plan(intent='role', action='question')
+        s['state'] = apply_behavior(s, first, reduce_plan(s['state'], first, s['card']))
+        self.assertEqual(s['state']['required_objection'], '')
+        second = core.plan(intent='product', action='monologue')
+        s['state'] = apply_behavior(s, second, reduce_plan(s['state'], second, s['card']))
+        self.assertEqual(s['state']['required_objection'], 'Дорого.')
 
     def test_levels_have_required_barriers_and_natural_end(self):
         for level, count in [('easy',1),('medium',2),('hard',3)]:
@@ -87,100 +91,56 @@ class LiveRegressions(unittest.TestCase):
             self.assertEqual(s['state']['agreement'],'')
 
     def test_focused_training_cannot_refuse_before_objection_is_spoken(self):
-        s=self.start()
-        p=core.plan(close='refusal',intent='need')
+        s=self.start(); p=core.plan(close='refusal',intent='need')
         state=apply_behavior(s,p,reduce_plan(s['state'],p,s['card']))
-        self.assertEqual(state['close'],'continue')
-        self.assertTrue(state['required_objection'])
+        self.assertEqual(state['close'],'continue'); self.assertTrue(state['required_objection'])
 
     def test_objection_is_spoken_and_hidden_information_not_given_to_writer(self):
-        s=self.talk(); state=copy.deepcopy(s['state'])
-        state.update(required_objection='Я подумаю.',focus_issue_id='comparable')
+        s=self.talk(); state=copy.deepcopy(s['state']); state.update(required_objection='Я подумаю.',focus_issue_id='comparable')
         ai=AI(None,'fake','fake');ai.request=Mock(return_value=dict(reply='Для входной зоны.',used_fact_ids=['need']))
-        answer=ai.reply(s,'Какую задачу решаете?',state)
-        self.assertIn('Я подумаю.',answer)
-        payload=ai.request.call_args.args[2]
-        self.assertEqual(payload['active_barrier'],'У других дешевле.')
-        self.assertNotIn('card',payload)
+        answer=ai.reply(s,'Какую задачу решаете?',state); self.assertIn('Я подумаю.',answer)
+        payload=ai.request.call_args.args[2]; self.assertEqual(payload['active_barrier'],'У других дешевле.'); self.assertNotIn('card',payload)
 
     def test_monologue_loses_engagement_and_cannot_open_facts(self):
         s=self.start(); p=core.plan(action='monologue',interest_delta=1,trust_delta=1)
-        state=apply_behavior(s,p,reduce_plan(s['state'],p,s['card']))
-        self.assertLess(state['trust'],s['state']['trust'])
-        self.assertEqual(state['revealed'],[])
+        state=apply_behavior(s,p,reduce_plan(s['state'],p,s['card'])); self.assertLess(state['trust'],s['state']['trust']); self.assertEqual(state['revealed'],[])
 
     def test_evaluator_never_receives_hidden_card_and_saves_rejections(self):
-        s=self.talk(); d=core.evaluation(s)
-        ai=AI(None,'fake','fake');ai.request=Mock(side_effect=[
-            d,dict(passed=False,issues=['next_step: contradiction']),
-            d,dict(passed=False,issues=['next_step: contradiction']),
-            d,dict(passed=False,issues=['next_step: contradiction'])])
+        s=self.talk(); d=core.evaluation(s); ai=AI(None,'fake','fake');ai.request=Mock(side_effect=[d,dict(passed=False,issues=['next_step: contradiction']),d,dict(passed=False,issues=['next_step: contradiction']),d,dict(passed=False,issues=['next_step: contradiction'])])
         with self.assertRaises(EvaluationError): ai.evaluate(s)
-        self.assertEqual(len(s['evaluation_diagnostics']),3)
-        self.assertNotIn('card',ai.request.call_args_list[0].args[2])
-        self.assertEqual(ai.request.call_args_list[2].args[2]['review_feedback'],['next_step: contradiction'])
+        self.assertEqual(len(s['evaluation_diagnostics']),3); self.assertNotIn('card',ai.request.call_args_list[0].args[2]); self.assertEqual(ai.request.call_args_list[2].args[2]['review_feedback'],['next_step: contradiction'])
 
     def test_fallback_keeps_all_sections_and_null_scores(self):
         s=self.talk(); d=fallback_data(s); report=render_report(d,s)
-        for key,title,maximum in SKILLS:
-            self.assertIn(title,report)
-        for title in ('РЕЗУЛЬТАТ ТРЕНИРОВКИ','ОЦЕНКА ПО НАВЫКАМ','ЧТО ОТРАБОТАТЬ'):
-            self.assertIn(title,report)
-        self.assertTrue(all(x['score'] is None for x in d['skills']))
-        self.assertIsNone(d['outcome'])
-        self.assertEqual(len(d['recommendations']),2)
+        for key,title,maximum in SKILLS: self.assertIn(title,report)
+        for title in ('РЕЗУЛЬТАТ ТРЕНИРОВКИ','ОЦЕНКА ПО НАВЫКАМ','ЧТО ОТРАБОТАТЬ'): self.assertIn(title,report)
+        self.assertTrue(all(x['score'] is None for x in d['skills'])); self.assertIsNone(d['outcome']); self.assertEqual(len(d['recommendations']),2)
 
     def test_pdf_preserves_cyrillic_and_excludes_hidden_card(self):
         import pdfplumber
         from academy.pdf_report import render_pdf
-        s=self.talk();s['report_data']=core.evaluation(s)
-        s['card']['hidden_motive']='SECRET-HIDDEN-MOTIVE'
-        s['card']['facts'].append(dict(id='private',text='SECRET-HIDDEN-FACT',reveal_when='never'))
+        s=self.talk();s['report_data']=core.evaluation(s);s['card']['hidden_motive']='SECRET-HIDDEN-MOTIVE';s['card']['facts'].append(dict(id='private',text='SECRET-HIDDEN-FACT',reveal_when='never'))
         for data in (s['report_data'],fallback_data(s)):
             s['report_data']=data
             for audience in ('employee','supervisor'):
-                with pdfplumber.open(render_pdf(s,audience)) as doc:
-                    text='\n'.join(p.extract_text() or '' for p in doc.pages)
-                self.assertIn('Академия продаж',text)
-                self.assertNotIn('SECRET-HIDDEN',text)
-                for _,title,_ in SKILLS:
-                    self.assertIn(title,text)
+                with pdfplumber.open(render_pdf(s,audience)) as doc: text='\n'.join(p.extract_text() or '' for p in doc.pages)
+                self.assertIn('Академия продаж',text); self.assertNotIn('SECRET-HIDDEN',text)
+                for _,title,_ in SKILLS: self.assertIn(title,text)
 
     def test_pdf_authorization_and_durable_outbox(self):
-        self.talk(); self.send('/finish'); self.send('/pdf')
-        self.assertTrue(any(x['body'].startswith('__academy_pdf__:') for x in self.store.outgoing(10)))
-        self.assertIsNone(self.store.session_for_user(20,self.store.current(10)['id']))
-        rows=keyboard_rows(self.store.current(10))
-        self.assertFalse(any('Показать скрытый сценарий' in r or 'Повторить обработку' in r for r in rows))
-        self.send('Отчёт руководителю')
-        self.assertFalse(any(x['body'].endswith(':supervisor') for x in self.store.outgoing(10)))
+        self.talk(); self.send('/finish'); self.send('/pdf'); self.assertTrue(any(x['body'].startswith('__academy_pdf__:') for x in self.store.outgoing(10))); self.assertIsNone(self.store.session_for_user(20,self.store.current(10)['id']))
+        rows=keyboard_rows(self.store.current(10)); self.assertFalse(any('Показать скрытый сценарий' in r or 'Повторить обработку' in r for r in rows)); self.send('Отчёт руководителю'); self.assertFalse(any(x['body'].endswith(':supervisor') for x in self.store.outgoing(10)))
 
     def test_finish_queues_pdf_automatically_and_report_prose_is_not_amputated(self):
-        self.talk()
-        long_reason = ('Менеджер уточнил задачу клиента и получил содержательный ответ. '
-                       'Затем предложил продолжить обсуждение на демонстрации.')
-        self.ai.evaluate = Mock(return_value=core.evaluation(self.store.current(10)))
-        data = self.ai.evaluate.return_value
-        data['skills'][0]['reason'] = long_reason
-        self.send('/finish')
-        outgoing = self.store.outgoing(10)
-        self.assertTrue(any(x['body'].startswith('__academy_pdf__:') for x in outgoing))
-        self.assertIn(long_reason, ''.join(x['body'] for x in outgoing))
-        self.assertIn('КАК ИСПОЛЬЗОВАТЬ ТРЕНАЖЁР ДАЛЬШЕ', ''.join(x['body'] for x in outgoing))
+        self.talk(); long_reason=('Менеджер уточнил задачу клиента и получил содержательный ответ. Затем предложил продолжить обсуждение на демонстрации.'); self.ai.evaluate=Mock(return_value=core.evaluation(self.store.current(10))); data=self.ai.evaluate.return_value; data['skills'][0]['reason']=long_reason; self.send('/finish'); outgoing=self.store.outgoing(10)
+        self.assertTrue(any(x['body'].startswith('__academy_pdf__:') for x in outgoing)); self.assertIn(long_reason,''.join(x['body'] for x in outgoing)); self.assertIn('КАК ИСПОЛЬЗОВАТЬ ТРЕНАЖЁР ДАЛЬШЕ',''.join(x['body'] for x in outgoing))
 
     def test_report_prescribes_two_concrete_reuses_of_trainer(self):
-        s=self.talk();data=core.evaluation(s)
-        cases=recommended_training_cases(data,s)
-        self.assertEqual(len(cases),2)
-        self.assertTrue(all(case.endswith('.') for case in cases))
+        s=self.talk();data=core.evaluation(s);cases=recommended_training_cases(data,s);self.assertEqual(len(cases),2);self.assertTrue(all(case.endswith('.') for case in cases))
 
     def test_pdf_marker_sends_real_document_and_enforces_audience(self):
-        done=self.talk();done=self.send('/finish')
-        telegram=Mock()
-        deliver_pdf(telegram,self.store,10,f"__academy_pdf__:{done['id']}:employee")
-        args,kwargs=telegram.send_document.call_args
-        self.assertEqual(args[0],10)
-        self.assertTrue(kwargs['visible_file_name'].endswith('.pdf'))
-        self.assertTrue(args[1].getvalue().startswith(b'%PDF-'))
-        with self.assertRaises(PermissionError):
-            deliver_pdf(telegram,self.store,10,f"__academy_pdf__:{done['id']}:supervisor")
+        done=self.talk();done=self.send('/finish');telegram=Mock();deliver_pdf(telegram,self.store,10,f"__academy_pdf__:{done['id']}:employee");args,kwargs=telegram.send_document.call_args;self.assertEqual(args[0],10);self.assertTrue(kwargs['visible_file_name'].endswith('.pdf'));self.assertTrue(args[1].getvalue().startswith(b'%PDF-'))
+        with self.assertRaises(PermissionError): deliver_pdf(telegram,self.store,10,f"__academy_pdf__:{done['id']}:supervisor")
+
+
+if __name__ == '__main__': unittest.main()
