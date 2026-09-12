@@ -495,7 +495,7 @@ def main():
                 pass
         bot.send_message(chat_id, text, reply_markup=markup)
 
-    def team_progress_page(edit_message=None):
+    def team_progress_page(chat_id, edit_message=None):
         with store.db() as db:
             rows = db.execute("""
                 SELECT user_id,role FROM user_access
@@ -523,18 +523,18 @@ def main():
         markup.add(telebot.types.InlineKeyboardButton('↻ Обновить', callback_data='team:list'))
         text = '\n'.join(lines)
         if edit_message is None:
-            bot.send_message(next(iter(admins)), text, reply_markup=markup)
+            bot.send_message(chat_id, text, reply_markup=markup)
         else:
-            bot.edit_message_text(text, next(iter(admins)), edit_message, reply_markup=markup)
+            bot.edit_message_text(text, chat_id, edit_message, reply_markup=markup)
 
-    def team_member_card(user_id, edit_message):
+    def team_member_card(chat_id, user_id, edit_message):
         result = admission.assess(path, user_id)
         name = latest_user_name(user_id)
         text = admission.supervisor_text(name, result)
         markup = telebot.types.InlineKeyboardMarkup(row_width=1)
         markup.add(telebot.types.InlineKeyboardButton('📨 Отправить сотруднику маршрут', callback_data=f'team:send:{user_id}'))
         markup.add(telebot.types.InlineKeyboardButton('← К прогрессу команды', callback_data='team:list'))
-        bot.edit_message_text(text, next(iter(admins)), edit_message, reply_markup=markup)
+        bot.edit_message_text(text, chat_id, edit_message, reply_markup=markup)
 
     def send_employee_route(user_id):
         result = admission.assess(path, user_id)
@@ -653,7 +653,7 @@ def main():
             return
         if cmd in ('/team', 'прогресс команды'):
             if message.chat.id in admins:
-                team_progress_page()
+                team_progress_page(message.chat.id)
             else:
                 send(message.chat.id, 'Прогресс команды доступен только руководителю.')
             return
@@ -682,9 +682,9 @@ def main():
             parts = str(call.data).split(':')
             action = parts[1]
             if action == 'list':
-                team_progress_page(call.message.message_id)
+                team_progress_page(chat_id, call.message.message_id)
             elif action == 'user':
-                team_member_card(int(parts[2]), call.message.message_id)
+                team_member_card(chat_id, int(parts[2]), call.message.message_id)
             elif action == 'send':
                 send_employee_route(int(parts[2]))
                 bot.answer_callback_query(call.id, 'Маршрут отправлен сотруднику.')
