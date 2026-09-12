@@ -77,6 +77,13 @@ def prepare_card(card, difficulty, focus=None):
     return card
 
 
+def _barrier_has_context(barrier, plan):
+    """Delay objections that are nonsensical before the offer exists."""
+    if barrier.get('id') != 'focus_price':
+        return True
+    return plan.get('action') in ('monologue', 'relevant_argument', 'objection_work')
+
+
 def apply_behavior(session, plan, state):
     """Never manufacture agreement; schedule barriers and a natural ending."""
     old = session['state']
@@ -118,11 +125,12 @@ def apply_behavior(session, plan, state):
     due = schedule[min(len(shown), len(schedule) - 1)]
     if unseen and substantive >= due and plan['intent'] != 'name' and state['close'] in ('continue', 'success'):
         b = unseen[0]
-        state['required_objection'], state['required_objection_id'] = b['text'], b['id']
-        state['issues'][b['id']] = 'open'
-        state['focus_issue_id'] = b['id']
-        state['suppress_issue_repeat'] = False
-        shown.add(b['id'])
+        if _barrier_has_context(b, plan):
+            state['required_objection'], state['required_objection_id'] = b['text'], b['id']
+            state['issues'][b['id']] = 'open'
+            state['focus_issue_id'] = b['id']
+            state['suppress_issue_repeat'] = False
+            shown.add(b['id'])
     state['presented_barriers'] = sorted(shown)
     if state['close'] == 'success' and (state['required_objection'] or len(shown) < len(barriers)
                                        or len(state['resolved']) < len(barriers)):
