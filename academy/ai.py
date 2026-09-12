@@ -310,7 +310,8 @@ fields — открытые исходные условия тренировки
                 if not review['passed'] or review['issues']:
                     payload['review_feedback'] = review['issues']
                     payload['rejected_report'] = review_report(data)
-                    raise EvaluationError('Report attribution or followup review failed')
+                    details = '; '.join(review['issues']) if review['issues'] else 'review returned passed=false without issues'
+                    raise EvaluationError('Report attribution or followup review failed: ' + details)
                 data['revealed'] = list(session['state'].get('revealed', []))
                 data['missed'] = [f['id'] for f in session['card']['facts'] if f['id'] not in data['revealed']]
                 return check_evaluation(data, session)
