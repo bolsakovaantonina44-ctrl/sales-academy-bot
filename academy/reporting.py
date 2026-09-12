@@ -1,5 +1,5 @@
 """Shared report data and management summary; unavailable is never a zero score."""
-from .domain import SKILLS
+from .domain import SKILLS, score_level
 from .pacing import FOCUS_OBJECTIONS
 
 UNAVAILABLE = 'недоступно: требуется проверка сохранённого диалога'
@@ -42,38 +42,37 @@ def total_score(data):
 
 
 def supervisor_recommendation(data, session):
-    """Cautious hiring signal: one simulation can suggest level, not prove trainability."""
+    """Describe this training and comparable dynamics without making a staffing verdict."""
     score = total_score(data)
     if score is None:
-        return dict(decision='Допуск к самостоятельным продажам: пока не определён.',
+        return dict(decision='Вывод по этой тренировке: недостаточно проверенных данных для оценки навыков.',
                     level='Уровень: не определён',
-                    trainability='Обучаемость: не определена',
+                    trainability='Динамика обучения: нужна ещё одна проверенная сопоставимая тренировка.',
                     focus=['Получить проверенный повторный результат.'])
 
-    if score >= 80:
-        level = 'Уровень: сильный'
-        decision = 'Допуск: можно переходить к самостоятельным разговорам после короткого ввода.'
-    elif score >= 65:
-        level = 'Уровень: средний'
-        decision = 'Допуск: можно переходить к реальным разговорам под контролем руководителя.'
-    elif score >= 50:
-        level = 'Уровень: слабый'
-        decision = 'Допуск: сначала повторная тренировка по зонам роста, затем контрольная проверка.'
+    level = 'Уровень: ' + score_level(score)
+    if score >= 75:
+        decision = 'Вывод по этой тренировке: навыки проявлены уверенно. Закрепите результат на другом сценарии.'
+    elif score >= 60:
+        decision = 'Вывод по этой тренировке: уверенный рабочий уровень с конкретными зонами роста.'
+    elif score >= 40:
+        decision = 'Вывод по этой тренировке: есть рабочая база; приоритетные навыки стоит повторно отработать в тренажёре.'
     else:
-        level = 'Уровень: слабый'
-        decision = 'Допуск: сначала обучение и повторная аттестация, затем решение о реальных разговорах.'
+        decision = 'Вывод по этой тренировке: навыки требуют системной отработки на базовом сценарии.'
 
     previous = session.get('comparison')
     if previous and previous.get('score') is not None:
         delta = score - previous['score']
         if delta >= 8:
-            trainability = 'Обучаемость: предварительно высокая — заметен рост в сопоставимой тренировке.'
+            trainability = 'Динамика обучения: заметный рост в сопоставимой тренировке.'
         elif delta > 0:
-            trainability = 'Обучаемость: предварительно средняя — есть положительная динамика.'
+            trainability = 'Динамика обучения: есть положительное изменение в сопоставимой тренировке.'
+        elif delta == 0:
+            trainability = 'Динамика обучения: результат сопоставимой тренировки не изменился.'
         else:
-            trainability = 'Обучаемость: пока не подтверждена — роста в сопоставимой тренировке нет.'
+            trainability = 'Динамика обучения: результат сопоставимой тренировки снизился; проверьте причины на следующем повторе.'
     else:
-        trainability = 'Обучаемость: нужна ещё одна сопоставимая тренировка; по одной попытке вывод не делаем.'
+        trainability = 'Динамика обучения: нужна ещё одна сопоставимая тренировка; по одной попытке вывод не делаем.'
 
     focus = [item['text'] for item in data.get('mistakes', [])[:2] if item.get('text')]
     if not focus:
