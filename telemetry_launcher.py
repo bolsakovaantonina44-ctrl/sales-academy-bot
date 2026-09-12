@@ -10,7 +10,9 @@ import re
 import time
 
 from academy.ai import AI
+from academy.domain import score_level
 from academy.engine import Engine
+from academy.pacing import FOCUS_OBJECTIONS
 from academy.telemetry import record, summary_text
 
 LOG = logging.getLogger("academy.telemetry")
@@ -130,21 +132,85 @@ install()
 import launcher  # noqa: E402
 
 _original_admin_text = launcher._handle_admin_text
+_original_session_markup = launcher._session_markup
+_original_session_card = launcher._session_card
+
+
+def _session_markup_with_report(session_id):
+    markup = _original_session_markup(session_id)
+    markup.row(launcher.telebot.types.KeyboardButton(f"Отчёт руководителю {session_id}"))
+    return markup
+
+
+def _session_card_human(session_id):
+    text = _original_session_card(session_id)
+    row, session = launcher._load_session(session_id)
+    if not row or not session:
+        return text
+    focus = session.get("training_focus")
+    focus_label = FOCUS_OBJECTIONS.get(focus, {}).get("label")
+    if focus_label and focus:
+        text = text.replace(f"Навык/фокус: {focus}", f"Навык/фокус: {focus_label}")
+    difficulty = (session.get("fields") or {}).get("difficulty")
+    difficulty_label = {"easy": "1 — лёгкая", "medium": "2 — средняя", "hard": "3 — сложная"}.get(difficulty)
+    if difficulty_label and difficulty:
+        text = text.replace(f"Сложность: {difficulty}", f"Сложность: {difficulty_label}")
+    score = launcher._score(session)
+    if score is not None:
+        text = text.replace(f"Итог: {score}/100", f"Итог: {score}/100 · {score_level(score)}")
+    return text
+
+
+def _send_supervisor_report(bot_client, chat_id, session_id):
+    row, session = launcher._load_session(session_id)
+    if not row:
+        bot_client.send_message(chat_id, "Сессия не найдена.")
+        return
+    if not session:
+        bot_client.send_message(chat_id, f"Сессия #{session_id}: не удалось прочитать данные.")
+        return
+    if not session.get("report_data"):
+        bot_client.send_message(
+            chat_id,
+            f"Сессия #{session_id}: разбор ещё не сформирован, поэтому отчёт руководителю пока недоступен.",
+            reply_markup=_session_markup_with_report(session_id),
+        )
+        return
+    from academy.pdf_report import render_pdf
+    fileobj = render_pdf(session, "supervisor")
+    fileobj.seek(0)
+    bot_client.send_document(
+        chat_id,
+        fileobj,
+        visible_file_name=f"Отчёт_руководителю_{session_id}.pdf",
+    )
+    bot_client.send_message(
+        chat_id,
+        f"Отчёт руководителю по сессии #{session_id} готов.",
+        reply_markup=_session_markup_with_report(session_id),
+    )
 
 
 def _safe_admin_text(bot_client, message):
     raw = (getattr(message, "text", None) or "").strip()
     normalized = raw.lower().replace("ё", "е")
+    is_admin = message.chat.id in launcher._admin_ids()
     if normalized in ("метрики", "статистика", "/metrics"):
-        if message.chat.id in launcher._admin_ids():
+        if is_admin:
             bot_client.send_message(message.chat.id, summary_text())
             return True
+    match = re.fullmatch(r"отчет руководителю\s+#?\s*(\d+)", normalized)
+    if match and is_admin:
+        _send_supervisor_report(bot_client, message.chat.id, int(match.group(1)))
+        return True
     # Difficulty buttons must always reach the trainer, never admin session navigation.
     if re.fullmatch(r"\d+", raw):
         return False
     return _original_admin_text(bot_client, message)
 
 
+launcher._session_markup = _session_markup_with_report
+launcher._session_card = _session_card_human
 launcher._handle_admin_text = _safe_admin_text
 
 
