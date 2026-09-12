@@ -22,7 +22,7 @@ class FakeStore:
                 'card': {'role': 'client'},
                 'phase': 'active',
                 'fields': {'customer': 'Директор компании'},
-                'training_focus': 'focus_no_need',
+                'training_focus': 'no_need',
                 'report_data': None,
             },
             {
@@ -30,7 +30,7 @@ class FakeStore:
                 'card': {'role': 'client'},
                 'phase': 'completed',
                 'fields': {'customer': 'Собственник компании'},
-                'training_focus': 'focus_price',
+                'training_focus': 'price',
                 'report_data': report_data,
             },
         ]
@@ -47,6 +47,7 @@ class HistorySummaryTests(unittest.TestCase):
         self.assertIn('49/100', text)
         self.assertIn('рабочая база', text)
         self.assertIn('№8', text)
+        self.assertIn('Нам не надо', text)
         self.assertIn('в процессе', text)
         self.assertNotIn('completed', text)
         self.assertIn('/report НОМЕР', text)
