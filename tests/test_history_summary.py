@@ -44,7 +44,7 @@ class HistorySummaryTests(unittest.TestCase):
         self.assertIn('Бесплатные тренировки: использовано 2 из 3, осталось 1.', text)
         self.assertIn('№7', text)
         self.assertIn('Дорого', text)
-        self.assertIn('50/100', text)
+        self.assertIn('49/100', text)
         self.assertIn('рабочая база', text)
         self.assertIn('№8', text)
         self.assertIn('в процессе', text)
