@@ -199,17 +199,24 @@ class LiveRegressions(unittest.TestCase):
         data = self.ai.evaluate.return_value
         data['skills'][0]['reason'] = long_reason
         self.send('/finish')
-        outgoing=self.store.outgoing(10)
+        outgoing = self.store.outgoing(10)
         self.assertTrue(any(x['body'].startswith('__academy_pdf__:') for x in outgoing))
-        self.assertIn(long_reason,''.join(x['body'] for x in outgoing))
-        self.assertIn('КАК ИСПОЛЬЗОВАТЬ ТРЕНАЖЁР ДАЛЬШЕ',''.join(x['body'] for x in outgoing))
+        self.assertIn(long_reason, ''.join(x['body'] for x in outgoing))
+        self.assertIn('КАК ИСПОЛЬЗОВАТЬ ТРЕНАЖЁР ДАЛЬШЕ', ''.join(x['body'] for x in outgoing))
 
     def test_report_prescribes_two_concrete_reuses_of_trainer(self):
-        s=self.talk();data=core.evaluation(s);cases=recommended_training_cases(data,s);self.assertEqual(len(cases),2);self.assertTrue(all(case.endswith('.') for case in cases))
+        s=self.talk();data=core.evaluation(s)
+        cases=recommended_training_cases(data,s)
+        self.assertEqual(len(cases),2)
+        self.assertTrue(all(case.endswith('.') for case in cases))
 
     def test_pdf_marker_sends_real_document_and_enforces_audience(self):
-        done=self.talk();done=self.send('/finish');telegram=Mock();deliver_pdf(telegram,self.store,10,f"__academy_pdf__:{done['id']}:employee");args,kwargs=telegram.send_document.call_args;self.assertEqual(args[0],10);self.assertTrue(kwargs['visible_file_name'].endswith('.pdf'));self.assertTrue(args[1].getvalue().startswith(b'%PDF-'))
-        with self.assertRaises(PermissionError): deliver_pdf(telegram,self.store,10,f"__academy_pdf__:{done['id']}:supervisor")
-
-
-if __name__ == '__main__': unittest.main()
+        done=self.talk();done=self.send('/finish')
+        telegram=Mock()
+        deliver_pdf(telegram,self.store,10,f"__academy_pdf__:{done['id']}:employee")
+        args,kwargs=telegram.send_document.call_args
+        self.assertEqual(args[0],10)
+        self.assertTrue(kwargs['visible_file_name'].endswith('.pdf'))
+        self.assertTrue(args[1].getvalue().startswith(b'%PDF-'))
+        with self.assertRaises(PermissionError):
+            deliver_pdf(telegram,self.store,10,f"__academy_pdf__:{done['id']}:supervisor")
