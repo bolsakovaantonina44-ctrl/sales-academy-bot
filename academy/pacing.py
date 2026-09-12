@@ -77,11 +77,8 @@ def _barrier_has_context(barrier, session, plan, substantive):
     """Some objections only make sense after the manager has given the client something to react to."""
     if barrier.get('id') != 'focus_price':
         return True
-    # A price/value objection before any offer context sounds artificial ("what is it? expensive").
-    # On hard it may appear quickly, but only after a presentation/value/price-related move.
-    if plan.get('action') in ('monologue', 'relevant_argument', 'objection_work'):
-        return True
-    return substantive >= 2
+    # Price resistance is meaningful only after an offer/value statement, not after a transfer or discovery question.
+    return plan.get('action') in ('monologue', 'relevant_argument', 'objection_work')
 
 
 def apply_behavior(session, plan, state):
