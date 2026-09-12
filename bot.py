@@ -13,7 +13,7 @@ from academy.store import Store
 from academy.domain import normalize_command, upgrade_session, chunks, is_finish_command
 from academy.diagnostics import log_failure
 from academy.pacing import FOCUS_OBJECTIONS
-from academy.access import PUBLIC, AKENSO, SUPERVISOR, get_role, set_role, has_company_access
+from academy.access import PUBLIC, AKENSO, SUPERVISOR, get_role, set_role, has_company_access, ensure_access_schema
 from academy.curriculum import MODULE_CONTENT
 from academy.learning import progress_snapshot
 from academy import assessment
@@ -496,6 +496,7 @@ def main():
         bot.send_message(chat_id, text, reply_markup=markup)
 
     def team_progress_page(chat_id, edit_message=None):
+        ensure_access_schema(path)
         with store.db() as db:
             rows = db.execute("""
                 SELECT user_id,role FROM user_access
