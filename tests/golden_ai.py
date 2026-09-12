@@ -2,7 +2,7 @@
 
 Synthetic conversations only. This runner calls the configured evaluation model
 and checks broad, human-approved quality bands. It is intentionally separate from
-normal predeploy because 20 live evaluations are slower and cost-bearing.
+normal predeploy because live evaluations are slower and cost-bearing.
 Run before/after prompt or rubric changes:
     python -u tests/golden_ai.py
 """
@@ -17,6 +17,7 @@ from openai import OpenAI
 from academy.ai import AI
 from academy.domain import session_empty
 from academy.reporting import total_score
+from academy.scenarios import template
 
 CASES_PATH = Path(__file__).with_name("golden_cases.json")
 
@@ -26,6 +27,10 @@ def build_session(case, session_id):
     s["id"] = session_id
     s["fields"].update(case["fields"])
     s["training_focus"] = case.get("focus")
+    # Evaluation expects the same valid client-card contract as a real completed
+    # training session. Golden cases test scoring/attribution, not card generation,
+    # so use a deterministic synthetic fixture and keep case-specific dialogue/fields.
+    s["card"] = template("2")["card"]
     s["history"] = [dict(role=role, content=text) for role, text in case["dialogue"]]
     s["phase"] = "closed"
     return s
@@ -53,7 +58,6 @@ def main():
     model = os.getenv("OPENAI_MODEL", "gpt-5.6-luna")
     eval_model = os.getenv("OPENAI_EVAL_MODEL", model)
     failures = []
-    rows = []
     with OpenAI(api_key=os.environ["OPENAI_API_KEY"], timeout=90, max_retries=1) as client:
         ai = AI(client, model, "unused", eval_model)
         for index, case in enumerate(cases, 1):
@@ -71,7 +75,6 @@ def main():
                 + ("" if not problems else " problems=" + " | ".join(problems)),
                 flush=True,
             )
-            rows.append((case["id"], case["level"], score, problems))
             if problems:
                 failures.append((case["id"], problems))
     passed = len(cases) - len(failures)
