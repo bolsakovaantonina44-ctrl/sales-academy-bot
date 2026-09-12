@@ -93,6 +93,37 @@ class LiveRegressions(unittest.TestCase):
         self.assertEqual(state['close'],'continue')
         self.assertTrue(state['required_objection'])
 
+    def test_resolved_or_deferred_objection_is_not_repeated_without_new_cause(self):
+        s=self.start()
+        barrier=s['card']['barriers'][0]['id']
+        s['state']['issues']={b['id']:'unknown' for b in s['card']['barriers']}
+        s['state']['issues'][barrier]='resolved'
+        s['state']['resolved']=[barrier]
+        s['state']['presented_barriers']=[barrier]
+        s['state']['issue_mentions']={barrier:2}
+        p=core.plan(intent='objection',focus_issue_id=barrier,
+                    issue_updates=[dict(id=barrier,status='resolved',reopen_reason='none')])
+        state=apply_behavior(s,p,reduce_plan(s['state'],p,s['card']))
+        self.assertTrue(state['suppress_issue_repeat'])
+        self.assertNotEqual(state.get('required_objection_id'),barrier)
+
+    def test_success_cannot_be_manufactured_before_all_barriers_are_seen_and_resolved(self):
+        s=self.start()
+        p=core.plan(intent='next_step',action='next_step',close='success',next_step_requested=True,
+                    agreement='Встреча завтра в 10:00')
+        state=apply_behavior(s,p,reduce_plan(s['state'],p,s['card']))
+        self.assertEqual(state['close'],'continue')
+        self.assertEqual(state.get('agreement',''),'')
+
+    def test_hidden_fact_is_revealed_at_most_one_per_turn_and_only_for_earning_actions(self):
+        s=self.start(); ids=[f['id'] for f in s['card']['facts'][:2]]
+        p=core.plan(intent='need',action='question',reveal_ids=ids)
+        state=apply_behavior(s,p,reduce_plan(s['state'],p,s['card']))
+        self.assertLessEqual(len(set(state['revealed'])-set(s['state'].get('revealed',[]))),1)
+        s2=self.start(); p2=core.plan(intent='need',action='monologue',reveal_ids=ids)
+        state2=apply_behavior(s2,p2,reduce_plan(s2['state'],p2,s2['card']))
+        self.assertEqual(state2['revealed'],[])
+
     def test_objection_is_spoken_and_hidden_information_not_given_to_writer(self):
         s=self.talk(); state=copy.deepcopy(s['state'])
         state.update(required_objection='Я подумаю.',focus_issue_id='comparable')
