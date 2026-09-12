@@ -109,9 +109,10 @@ def apply_behavior(session, plan, state):
     state['required_objection'] = ''
     state['required_objection_id'] = ''
     unseen = [b for b in barriers if b['id'] not in shown]
+    forced_focus = state['close'] == 'refusal' and bool(unseen)
     # A focused exercise must not end before the selected objection is ever spoken.
     # The manager should get at least one real opportunity to handle the trained skill.
-    if state['close'] == 'refusal' and unseen:
+    if forced_focus:
         state['close'] = 'continue'
         state['agreement'] = old.get('agreement', '')
         state['ending_reason'] = ''
@@ -125,7 +126,7 @@ def apply_behavior(session, plan, state):
     due = schedule[min(len(shown), len(schedule) - 1)]
     if unseen and substantive >= due and plan['intent'] != 'name' and state['close'] in ('continue', 'success'):
         b = unseen[0]
-        if _barrier_has_context(b, plan):
+        if forced_focus or _barrier_has_context(b, plan):
             state['required_objection'], state['required_objection_id'] = b['text'], b['id']
             state['issues'][b['id']] = 'open'
             state['focus_issue_id'] = b['id']

@@ -18,7 +18,7 @@ class ObjectionTimingTests(unittest.TestCase):
         )
         self.assertEqual(session['state']['required_objection'], '')
 
-        second = core.plan(intent='product', action='monologue')
+        second = core.plan(intent='other', action='monologue')
         session['state'] = apply_behavior(
             session, second, reduce_plan(session['state'], second, session['card'])
         )
