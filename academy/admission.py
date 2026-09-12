@@ -3,6 +3,16 @@ from .learning import MODULES, progress_snapshot
 
 MIN_ADMISSION_SCORE = 7.0
 
+PRACTICE_CASES = {
+    "first_contact": "Первый контакт: кратко назвать причину обращения и задать вопрос об объекте или текущей задаче.",
+    "price": "Возражение «Дорого»: выяснить критерий сравнения и аргументировать через подтверждённую потребность без автоматической скидки.",
+    "supplier": "Возражение «Уже работаем с другим»: выяснить, что устраивает в текущем поставщике и при каком условии рассмотрят альтернативу.",
+    "send_info": "Возражение «Пришлите информацию»: уточнить, что именно нужно, и согласовать дату и повод следующего контакта.",
+    "lpr": "Выход на ЛПР: объяснить секретарю или коллеге цель звонка и получить корректный следующий контакт.",
+    "project": "Проектный подбор: выяснить объект, формат, поверхность, объём, сроки, документы и ограничения до предложения.",
+    "rules": "Безопасное коммерческое обещание: корректно отработать запрос на цену, скидку, наличие или срок без выдуманных условий.",
+}
+
 MODULE_RECOMMENDATIONS = {
     "product": "Повторить продуктовый модуль и потренироваться подбирать решение только после уточнения объекта, объёма, сроков и ограничений.",
     "sales": "Повторить техники продаж: открытые вопросы, аргумент через подтверждённую потребность, работа с возражением и конкретный следующий шаг.",
@@ -27,6 +37,7 @@ def assess(path, user_id):
             "decision": "Аттестация ещё не завершена.",
             "employee_recommendations": ["Пройти оставшиеся модули и тест по каждому из них."],
             "supervisor_recommendations": ["Не назначать итоговый допуск до результатов всех трёх модулей."],
+            "practice_cases": [],
         }
 
     grade = round(sum(scores.values()) / len(scores) / 10, 1)
@@ -57,6 +68,13 @@ def assess(path, user_id):
             "Поставить понятную дату пересдачи и дать обратную связь по одному навыку за раз.",
         ]
 
+    if grade < MIN_ADMISSION_SCORE:
+        practice_cases = ["project", "first_contact", "price", "supplier", "send_info", "rules"]
+    elif grade < 8.0:
+        practice_cases = ["first_contact", "price", "send_info", "lpr"]
+    else:
+        practice_cases = ["supplier", "lpr", "project"]
+
     return {
         "complete": True,
         "scores": scores,
@@ -65,6 +83,7 @@ def assess(path, user_id):
         "decision": decision,
         "employee_recommendations": employee,
         "supervisor_recommendations": supervisor,
+        "practice_cases": practice_cases,
     }
 
 
@@ -84,6 +103,9 @@ def employee_text(result):
         ]
     lines += ["", "Рекомендации:"]
     lines += [f"• {item}" for item in result["employee_recommendations"]]
+    if result["practice_cases"]:
+        lines += ["", "Обязательные тренировки:"]
+        lines += [f"• {PRACTICE_CASES[item]}" for item in result["practice_cases"]]
     return "\n".join(lines)
 
 
@@ -99,4 +121,7 @@ def supervisor_text(employee_name, result):
         lines += ["", f"Бал допуска: {result['grade']:.1f}/10", f"Решение: {result['decision']}."]
     lines += ["", "Рекомендации руководителю:"]
     lines += [f"• {item}" for item in result["supervisor_recommendations"]]
+    if result["practice_cases"]:
+        lines += ["", "Назначить тренировки:"]
+        lines += [f"• {PRACTICE_CASES[item]}" for item in result["practice_cases"]]
     return "\n".join(lines)
