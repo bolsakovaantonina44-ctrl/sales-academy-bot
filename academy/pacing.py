@@ -37,6 +37,12 @@ FOCUS_OBJECTIONS = {
 }
 
 
+CONTEXT_REQUIRED_BARRIERS = {
+    'focus_price', 'focus_no_need', 'focus_supplier', 'focus_send_info',
+    'comparable', 'loyalty', 'required_attention', 'required_doubt',
+}
+
+
 def prepare_card(card, difficulty, focus=None):
     card = copy.deepcopy(card)
     count = {'easy': 1, 'medium': 2, 'hard': 3}[difficulty]
@@ -78,8 +84,8 @@ def prepare_card(card, difficulty, focus=None):
 
 
 def _barrier_has_context(barrier, plan):
-    """Delay objections that are nonsensical before the offer exists."""
-    if barrier.get('id') != 'focus_price':
+    """Delay objections that are nonsensical before the client has an offer to react to."""
+    if barrier.get('id') not in CONTEXT_REQUIRED_BARRIERS:
         return True
     return plan.get('action') in ('monologue', 'relevant_argument', 'objection_work')
 
