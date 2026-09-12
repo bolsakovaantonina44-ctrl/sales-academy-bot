@@ -3,7 +3,7 @@ import copy
 import json
 from datetime import datetime, timezone
 from .domain import (session_empty, initial_state, normalize_command, is_finish_command,
-                     render_report, partial_report, VERSION, RUBRIC_VERSION)
+                     render_report, partial_report, score_level, VERSION, RUBRIC_VERSION)
 from .diagnostics import log_failure
 from .scenarios import TEMPLATES, template, menu
 from .pacing import prepare_card, FOCUS_OBJECTIONS
@@ -71,6 +71,40 @@ class Engine:
             return base + 'Выберите одно возражение кнопкой — это будет главный навык текущей тренировки.'
         return base + 'При необходимости выберите сложность 1, 2 или 3, затем нажмите «Начать тренировку».'
 
+    def history_summary(self, user):
+        attempts = self.store.attempts(user)
+        recent = [x for x in self.store.recent(user) if x['card']]
+        if user in self.admin_ids:
+            usage = 'Тестовый лимит: для администратора не применяется.'
+        else:
+            used = min(attempts, self.limit)
+            remaining = max(0, self.limit - attempts)
+            usage = f'Бесплатные тренировки: использовано {used} из {self.limit}, осталось {remaining}.'
+
+        lines = ['МОИ ТРЕНИРОВКИ', usage, '']
+        if not recent:
+            lines.append('Пока нет тренировок.')
+        for item in recent:
+            focus = FOCUS_OBJECTIONS.get(item.get('training_focus'), {}).get('label', 'Общий разговор')
+            score = total_score(item.get('report_data'))
+            if score is not None:
+                result = f'{score}/100 · {score_level(score)}'
+            elif item['phase'] == 'completed':
+                result = 'оценка недоступна'
+            elif item['phase'] == 'active':
+                result = 'в процессе'
+            elif item['phase'] == 'closed':
+                result = 'ожидает разбора'
+            elif item['phase'] == 'abandoned':
+                result = 'не завершена'
+            else:
+                result = 'подготовка'
+            customer = item.get('fields', {}).get('customer') or 'Клиент не указан'
+            lines.append(f"№{item['id']} · {focus} · {result}\nКлиент: {customer}")
+        if recent:
+            lines += ['', 'Открыть сохранённый разбор: /report НОМЕР']
+        return '\n'.join(lines)
+
     def after_name_message(self, s):
         if s['phase'] == 'ready':
             return 'Имя сохранено.\n\n' + self.setup_summary(s)
@@ -129,10 +163,7 @@ class Engine:
             s['employee'] = saved_employee
             replies = [menu()]
         elif cmd in ('/history', 'мои тренировки'):
-            recent = [x for x in self.store.recent(user) if x['card']]
-            replies = ['ПОСЛЕДНИЕ ТРЕНИРОВКИ\n' + ('\n'.join(
-                f"№{x['id']}: {x['fields']['customer']} — {x['phase']}" for x in recent) or 'Пока нет тренировок.') +
-                '\n\nДля сохранённого разбора: /report НОМЕР']
+            replies = [self.history_summary(user)]
         elif cmd in ('/pdf', 'сформировать отчет', 'скачать результат', 'отчет сотруднику', 'отчет руководителю'):
             if s['phase'] != 'completed' or not s.get('report'):
                 replies = ['Сначала завершите тренировку и получите разбор.']
