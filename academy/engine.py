@@ -327,3 +327,11 @@ class Engine:
         s['updated_at'] = datetime.now(timezone.utc).isoformat()
         self.store.save(s, event, replies, charge=charge)
         return replies
+
+
+def deliver(store, user_id, send):
+    """Stop at first delivery failure. Never generate another turn before this drains."""
+    for item in store.outgoing(user_id):
+        send(item['chat_id'], item['body'])
+        store.sent(item['id'])
+    store.release_waiting(user_id)
