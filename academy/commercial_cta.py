@@ -88,3 +88,20 @@ def _patched_init(self, path):
 if not getattr(Store, '_commercial_cta_patched', False):
     Store.__init__ = _patched_init
     Store._commercial_cta_patched = True
+
+# Future users already receive the profile offer when their free limit is reached.
+# Replace only the built-in generic demo offer; preserve any company-specific offer.
+from . import knowledge as _knowledge  # noqa: E402
+_original_profile = _knowledge.profile
+
+
+def _profile_with_cta():
+    value = _original_profile()
+    if str(value.get('offer', '')).startswith('Демо завершено.'):
+        value['offer'] = cta_text()
+    return value
+
+
+if not getattr(_knowledge, '_commercial_cta_patched', False):
+    _knowledge.profile = _profile_with_cta
+    _knowledge._commercial_cta_patched = True
