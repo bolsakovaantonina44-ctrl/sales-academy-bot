@@ -23,6 +23,7 @@ from academy.reporting import total_score
 from academy.scenarios import template
 
 CASES_PATH = Path(__file__).with_name("golden_cases.json")
+# Keep gate calibration separate from production scoring behavior.
 MAXIMA = {key: maximum for key, _, maximum in SKILLS}
 
 
