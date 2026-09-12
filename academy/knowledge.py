@@ -28,9 +28,9 @@ METHODOLOGY = {
 
 def profile():
     path = os.getenv('COMPANY_PROFILE_PATH')
-    default_path = ROOT / 'profiles' / 'akenso_profile.json'
-    source = Path(path) if path else default_path
-    value = json.loads(source.read_text()) if source.exists() else {}
+    # The public trainer stays product-agnostic. Corporate product data is supplied
+    # through the closed learning modules or an explicitly configured profile.
+    value = json.loads(Path(path).read_text()) if path else {}
     return {'company': value.get('company', 'Индивидуальная учебная ситуация'),
             'product_knowledge': deepcopy(value.get('product_knowledge', {})),
             'company_rules': deepcopy(value.get('company_rules', {})),
