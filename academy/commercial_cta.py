@@ -5,16 +5,24 @@ import os
 from .store import Store
 
 CTA_KEY = 'commercial_cta_v1'
-CTA_TEXT = (
-    'Тестовый доступ завершён.\n\n'
-    'Вы прошли 3 бесплатные тренировки и получили разбор своих навыков.\n\n'
-    'Полная версия «Академии продаж» настраивается под конкретную компанию: '
-    'продукт, реальные клиентские ситуации, возражения, стандарты продаж и отчётность для руководителя.\n\n'
-    'Хотите внедрить тренажёр в свой отдел продаж? '
-    'Напишите Светлане в Telegram: @Shmakova_svet'
-)
 
 _original_init = Store.__init__
+
+
+def _contact():
+    value = os.getenv('COMMERCIAL_CONTACT', '').strip()
+    return value or 'Telegram автора проекта'
+
+
+def cta_text():
+    return (
+        'Тестовый доступ завершён.\n\n'
+        'Вы прошли 3 бесплатные тренировки и получили разбор своих навыков.\n\n'
+        'Полная версия «Академии продаж» настраивается под конкретную компанию: '
+        'продукт, реальные клиентские ситуации, возражения, стандарты продаж и отчётность для руководителя.\n\n'
+        'Хотите внедрить тренажёр в свой отдел продаж? '
+        f'Напишите в Telegram: {_contact()}'
+    )
 
 
 def _admin_ids():
@@ -68,7 +76,7 @@ def _queue_existing_completed_users(store):
             if inserted:
                 db.execute(
                     'INSERT INTO outbox(user_id,chat_id,body) VALUES(?,?,?)',
-                    (user_id, user_id, CTA_TEXT),
+                    (user_id, user_id, cta_text()),
                 )
 
 
