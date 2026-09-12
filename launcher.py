@@ -1,10 +1,11 @@
 """Production launcher with resilient Telegram admin-session navigation.
 
-The inline callback viewer is kept, but admins also get a text-button fallback.
-This avoids Telegram client callback quirks: session buttons send ordinary text
-(`Сессия 15`), which is intercepted before it can enter the sales simulation.
-Admins can also open the full transcript and replay stored Telegram voice messages.
+This module keeps the production bot compatible with Telegram client quirks while
+providing an admin session viewer. It also persists an exact mapping between new
+voice messages and the session in which they were sent, so supervisors can replay
+the correct audio later.
 """
+import faulthandler
 import functools
 import json
 import logging
@@ -17,11 +18,85 @@ import telebot
 
 from academy.domain import chunks, upgrade_session
 from academy.reporting import total_score
+from academy.store import Store
 
 
 LOG = logging.getLogger("academy")
 _original_edit_message_text = telebot.TeleBot.edit_message_text
 _original_message_handler = telebot.TeleBot.message_handler
+_original_store_enqueue = Store.enqueue
+
+
+def _db_path():
+    return os.getenv("DB_PATH", "./data/academy.sqlite3")
+
+
+def _ensure_voice_map(path=None):
+    """Create the lightweight voice-to-session index if it is not present yet."""
+    target = path or _db_path()
+    try:
+        with sqlite3.connect(target) as db:
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS voice_session_map("
+                "inbox_id INTEGER PRIMARY KEY, "
+                "session_id INTEGER NOT NULL, "
+                "user_id INTEGER NOT NULL, "
+                "file_id TEXT NOT NULL)"
+            )
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS ix_voice_session_map_session "
+                "ON voice_session_map(session_id,inbox_id)"
+            )
+    except sqlite3.OperationalError:
+        # The database directory may not exist yet at import time. The first
+        # accepted voice message retries creation after Store has initialized it.
+        pass
+
+
+def _enqueue_with_voice_session(self, event_key, user_id, chat_id, kind, text):
+    """Keep Store semantics, and index new voice messages to their active session."""
+    accepted = _original_store_enqueue(self, event_key, user_id, chat_id, kind, text)
+    if not accepted or kind != "voice":
+        return accepted
+    try:
+        _ensure_voice_map(self.path)
+        with self.db() as db:
+            event = db.execute(
+                "SELECT id FROM inbox WHERE event_key=?", (event_key,)
+            ).fetchone()
+            current = db.execute(
+                "SELECT u.current_id,s.payload FROM users u "
+                "JOIN sessions s ON s.id=u.current_id WHERE u.user_id=?",
+                (user_id,),
+            ).fetchone()
+            if not event or not current or not current["current_id"]:
+                return accepted
+            try:
+                phase = upgrade_session(json.loads(current["payload"])).get("phase")
+            except Exception:
+                phase = None
+            # Voice replay belongs to the sales conversation itself. Do not attach
+            # setup/profile voice input to an old or not-yet-started session.
+            if phase not in ("active", "closed"):
+                return accepted
+            db.execute(
+                "INSERT OR REPLACE INTO voice_session_map(inbox_id,session_id,user_id,file_id) "
+                "VALUES(?,?,?,?)",
+                (event["id"], current["current_id"], user_id, text),
+            )
+    except Exception:
+        # Voice indexing is an admin convenience and must never block training.
+        LOG.exception("Voice session indexing failed user_id=%s event_key=%s", user_id, event_key)
+    return accepted
+
+
+Store.enqueue = _enqueue_with_voice_session
+
+# bot.main() intentionally used a one-shot 60-second faulthandler dump while the
+# production worker was being diagnosed. It prints a scary "Timeout" traceback
+# even when long polling is healthy. Disable only that scheduled dump; real Python
+# exceptions and normal logging remain untouched.
+faulthandler.dump_traceback_later = lambda *args, **kwargs: None
 
 
 def _resilient_edit_message_text(self, text, chat_id=None, message_id=None,
@@ -66,10 +141,6 @@ def _admin_ids():
             except ValueError:
                 pass
     return result
-
-
-def _db_path():
-    return os.getenv("DB_PATH", "./data/academy.sqlite3")
 
 
 def _session_rows(page=0, page_size=8):
@@ -152,11 +223,8 @@ def _send_sessions(bot_client, chat_id, page=0):
     )
 
 
-def _voice_rows_for_session(session_id):
-    """Recover original Telegram voice file_ids by matching stored transcripts to this session."""
-    row, session = _load_session(session_id)
-    if not row or not session:
-        return []
+def _legacy_voice_rows(row, session):
+    """Best-effort recovery for sessions created before exact voice indexing."""
     manager_lines = [
         str(item.get("content", "")).strip()
         for item in (session.get("history") or [])
@@ -180,6 +248,28 @@ def _voice_rows_for_session(session_id):
             matched.append(item)
             remaining[transcript] -= 1
     return matched
+
+
+def _voice_rows_for_session(session_id):
+    """Return exact new voice messages; fall back to transcript matching for legacy data."""
+    row, session = _load_session(session_id)
+    if not row or not session:
+        return []
+    _ensure_voice_map()
+    try:
+        with sqlite3.connect(_db_path()) as db:
+            db.row_factory = sqlite3.Row
+            exact = db.execute(
+                "SELECT i.id,i.text,m.file_id AS raw_text FROM voice_session_map m "
+                "JOIN inbox i ON i.id=m.inbox_id "
+                "WHERE m.session_id=? AND m.user_id=? ORDER BY i.id",
+                (int(session_id), row["user_id"]),
+            ).fetchall()
+        if exact:
+            return exact
+    except sqlite3.OperationalError:
+        pass
+    return _legacy_voice_rows(row, session)
 
 
 def _session_card(session_id):
