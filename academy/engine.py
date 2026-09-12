@@ -254,6 +254,7 @@ class Engine:
                     s['phase'], s['outcome'] = 'closed', 'manual_finish'
                 self.make_report(s, event)
                 s['phase'] = 'completed'
+                charge = True
                 replies = [s['report'], f"__academy_pdf__:{s['id']}:employee",
                            'Разбор сохранён. PDF-файл отправлен автоматически. Доступны «Посмотреть разбор», «Скачать результат» и «Новая тренировка».']
         elif s['phase'] == 'completed':
@@ -325,7 +326,7 @@ class Engine:
                     log_failure(event, s, 'setup', exc)
                     replies = ['Не удалось разобрать описание. Напишите одним сообщением: что продаёте, кому и какого результата хотите достичь.']
         s['updated_at'] = datetime.now(timezone.utc).isoformat()
-        self.store.save(s, event, replies, charge=charge)
+        self.store.commit(event, s, replies, counted=charge)
         return replies
 
 
