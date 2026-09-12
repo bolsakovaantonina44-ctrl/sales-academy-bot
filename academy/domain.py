@@ -355,6 +355,18 @@ def _check_evaluation(data, session):
     return data
 
 
+def score_level(score):
+    if score < 40:
+        return 'требует системной отработки'
+    if score < 60:
+        return 'рабочая база'
+    if score < 75:
+        return 'уверенный уровень'
+    if score < 90:
+        return 'сильный уровень'
+    return 'очень сильный уровень'
+
+
 def render_report(data, session, include_hidden=False):
     items = {v['id']: v for v in data['skills']}
     earned = sum(x['score'] or 0 for x in items.values())
@@ -367,7 +379,7 @@ def render_report(data, session, include_hidden=False):
     elif not data['simulation_valid']:
         lines += ['Симуляция требует проверки. Итоговый балл не выставлен.']
     elif maximum == 100:
-        lines += [f'Навыки: {earned}/100']
+        lines += [f'Навыки: {earned}/100', f'Уровень: {score_level(earned)}']
     else:
         lines += [f'По наблюдаемым навыкам: {earned}/{maximum}.',
                   'Общий балл из 100 не рассчитан: по части навыков недостаточно данных.']
