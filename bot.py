@@ -668,6 +668,13 @@ def main():
             else:
                 send(message.chat.id, 'Управление доступом доступно только администратору.')
             return
+        if cmd in ('/akenso', 'выдать себе доступ акенсо'):
+            if message.chat.id not in admins:
+                send(message.chat.id, 'Эта команда доступна только руководителю.')
+                return
+            set_role(path, message.chat.id, AKENSO)
+            send(message.chat.id, 'Корпоративный доступ АКЕНСО включён. Откройте «База знаний» или «Аттестация».')
+            return
         if cmd in ('/team', 'прогресс команды'):
             if message.chat.id in admins:
                 team_progress_page(message.chat.id)
