@@ -495,6 +495,22 @@ def main():
                 pass
         bot.send_message(chat_id, text, reply_markup=markup)
 
+    def send_access_user_card(chat_id, user_id, edit_message=None):
+        """Open an access card even when Telegram refuses to edit the old message.
+
+        Inline buttons otherwise only blink on the client when an edit fails (for
+        example, after a stale callback). A fresh message is a safe fallback.
+        """
+        ensure_access_schema(path)
+        text, markup = access_user_card(user_id)
+        if edit_message is not None:
+            try:
+                bot.edit_message_text(text, chat_id, edit_message, reply_markup=markup)
+                return
+            except Exception:
+                LOG.exception('Could not edit access user card; sending a new one')
+        bot.send_message(chat_id, text, reply_markup=markup)
+
     def team_progress_page(chat_id, edit_message=None):
         ensure_access_schema(path)
         with store.db() as db:
@@ -807,16 +823,14 @@ def main():
                 return
             if action == 'user':
                 user_id = int(parts[2])
-                text, markup = access_user_card(user_id)
-                bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
-                bot.answer_callback_query(call.id)
+                bot.answer_callback_query(call.id, 'Открываю карточку…')
+                send_access_user_card(chat_id, user_id, call.message.message_id)
                 return
             if action == 'set':
                 user_id = int(parts[2])
                 role = parts[3]
                 set_role(path, user_id, role)
-                text, markup = access_user_card(user_id)
-                bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+                send_access_user_card(chat_id, user_id, call.message.message_id)
                 bot.answer_callback_query(call.id, f'Роль: {ROLE_LABELS[role]}')
                 return
             bot.answer_callback_query(call.id, 'Неизвестная команда.')
