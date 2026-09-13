@@ -31,8 +31,7 @@ ONBOARDING = {
                     "• KERRANOVA — kerranova.ru\n"
                     "• PIASTRELLA — piastrella-gres.ru\n"
                     "• ESTIMA — estima.ru\n"
-                    "• KERAMA MARAZZI — kerama-marazzi.com\n"
-                    "• ITALON — italonceramica.ru, только справочно и после внутреннего согласования.\n\n"
+                    "• KERAMA MARAZZI — kerama-marazzi.com\n\n"
                     "Atlas Concorde Russia и Atlas Concorde Italia рассматриваются отдельно: ассортимент, "
                     "цены, наличие и проектная логика могут отличаться."
                 ),
@@ -65,8 +64,7 @@ ONBOARDING = {
                     "• PIASTRELLA — экономичные объектные и фасадные решения.\n"
                     "• ESTIMA — по задаче, в том числе фасадные решения.\n"
                     "• KERAMA MARAZZI — широкий ассортимент для разных зон объекта.\n"
-                    "• ATLAS CONCORDE RUSSIA / ITALIA — рассматривать раздельно.\n"
-                    "• ITALON — не использовать как базовый инициативный вариант; только по запросу и после внутреннего согласования.\n\n"
+                    "• ATLAS CONCORDE RUSSIA / ITALIA — рассматривать раздельно.\n\n"
                     "МОП — места общего пользования: холлы, коридоры, лифтовые зоны, лестницы и другие общие пространства здания.\n\n"
                     "Главный принцип: сначала понять зону, задачу, объём и срок, а уже потом выбирать фабрику."
                 ),
