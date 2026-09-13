@@ -16,6 +16,15 @@ from academy.pacing import FOCUS_OBJECTIONS
 from academy.access import PUBLIC, AKENSO, SUPERVISOR, get_role, set_role, has_company_access, ensure_access_schema
 from academy.curriculum import MODULE_CONTENT
 from academy.learning import progress_snapshot
+from academy.ui_policy import (
+    CONTEXT_HOME,
+    CONTEXT_LEARNING,
+    CONTEXT_ASSESSMENT,
+    CONTEXT_TRAINING,
+    CONTEXT_RESULT,
+    CONTEXT_MANAGEMENT,
+    rows_for_context,
+)
 from academy import assessment
 from academy import admission
 
@@ -31,6 +40,8 @@ CONTROL_COMMANDS = {
     'скачать результат', 'сформировать отчет', 'отчет сотруднику', 'отчет руководителю',
     'показать скрытый сценарий', 'мои тренировки', 'сессии пользователей',
     'доступ сотрудников', 'прогресс команды', 'база знаний', 'аттестация',
+    'продолжить обучение', 'тренировка', 'мой прогресс', 'команда', 'к академии',
+    'управление доступом', 'технические сессии',
     'изменить имя', 'сменить имя',
     'легкий', 'лёгкий', 'средний', 'сложный', '1', '2', '3',
 } | {normalize_command(label) for label in FOCUS_LABELS}
@@ -69,29 +80,18 @@ def connect_telegram(telebot_module, token_sources):
 
 
 def keyboard_rows(session, failed=False, admin=False):
+    """Training-only keyboard. Management actions intentionally live elsewhere."""
     phase = session['phase']
     if failed:
-        rows = [['Повторить обработку', 'Пропустить эту реплику'], ['Завершить тренировку']]
-        if admin:
-            rows.append(['Сессии пользователей'])
-        return rows
+        return [['Повторить обработку', 'Пропустить эту реплику'], ['Завершить тренировку']]
     if phase == 'active':
-        rows = [['Завершить тренировку']]
-        if admin:
-            rows.append(['Сессии пользователей'])
-        return rows
+        return [['Завершить тренировку']]
     if phase == 'closed':
-        rows = [['Завершить тренировку', 'Новая тренировка']]
-        if admin:
-            rows.append(['Сессии пользователей'])
-        return rows
+        return [['Завершить тренировку', 'Новая тренировка']]
     if phase == 'completed':
         rows = [['Посмотреть разбор', 'Скачать результат'], ['Новая тренировка', 'Мои тренировки']]
         if session.get('report_status') == 'technical_partial':
             rows.append(['Обновить разбор'])
-        if admin:
-            rows.append(['Отчёт руководителю', 'Показать скрытый сценарий'])
-            rows.append(['Сессии пользователей'])
         return rows
     if phase == 'ready':
         rows = []
@@ -100,14 +100,8 @@ def keyboard_rows(session, failed=False, admin=False):
             rows.append(['1', '2', '3'])
         rows.extend(_focus_rows())
         rows.append(['Новая тренировка'])
-        if admin:
-            rows.append(['Сессии пользователей'])
         return rows
-    # Product-specific demo scenarios remain internal fixtures, not public choices.
-    rows = [['Мои тренировки']]
-    if admin:
-        rows.append(['Сессии пользователей'])
-    return rows
+    return [['Мои тренировки']]
 
 
 def receive_text(store, event_key, user_id, chat_id, kind, text, send):
@@ -321,6 +315,49 @@ def main():
     admins = [int(v.strip()) for v in os.getenv('ADMIN_IDS', '').split(',') if v.strip()]
     engine = Engine(store, ai, limit=int(os.getenv('FREE_TRAININGS', '3')), admin_ids=admins)
 
+    # UI context is deliberately independent from the training session phase.
+    # This prevents a completed training keyboard from leaking into Academy screens.
+    ui_context = {}
+
+    def current_context(user_id):
+        return ui_context.get(int(user_id), CONTEXT_TRAINING)
+
+    def set_context(user_id, context):
+        ui_context[int(user_id)] = context
+        return context
+
+    def _reply_markup(rows):
+        if not rows:
+            return telebot.types.ReplyKeyboardRemove()
+        markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+        for row in rows:
+            markup.row(*[telebot.types.KeyboardButton(value) for value in row])
+        return markup
+
+    def context_rows(user_id, context=None):
+        context = context or current_context(user_id)
+        role = get_role(path, user_id)
+        is_admin = int(user_id) in admins
+        try:
+            session = store.current(user_id)
+            phase = session.get('phase')
+        except Exception:
+            session = None
+            phase = None
+        if context == CONTEXT_TRAINING:
+            rows = keyboard_rows(session or {'phase': 'setup'}, bool(store.failed(user_id)), False)
+            if role in {AKENSO, SUPERVISOR} and phase not in ('active', 'closed'):
+                rows.append(['К Академии'])
+            return rows
+        return rows_for_context(role, context, phase=phase, is_admin=is_admin)
+
+    def activate_context(chat_id, context, label=None):
+        previous = current_context(chat_id)
+        set_context(chat_id, context)
+        if label is not None or previous != context:
+            text = label or 'Раздел открыт.'
+            bot.send_message(chat_id, text, reply_markup=_reply_markup(context_rows(chat_id, context)))
+
     def load_admin_session(session_id):
         with store.db() as db:
             row = db.execute('SELECT id,user_id,payload,counted FROM sessions WHERE id=?', (session_id,)).fetchone()
@@ -417,7 +454,7 @@ def main():
         history = s.get('history') or []
         if not history:
             return [f'Сессия #{session_id}: диалог пуст.']
-        lines = [f'ДИАЛОГ СЕССИИ #{session_id}']
+        lines = [f'DИАЛОГ СЕССИИ #{session_id}'.replace('D', 'Д')]
         for index, item in enumerate(history, 1):
             role = item.get('role')
             if role == 'user':
@@ -471,8 +508,8 @@ def main():
             ))
         text = ('ДОСТУП СОТРУДНИКОВ\n\n'
                 'Публичный — только тестовый тренажёр.\n'
-                'АКЕНСО — база знаний, аттестация и тренажёр.\n'
-                'Руководитель — корпоративный доступ руководителя.\n\n'
+                'АКЕНСО — обучение, аттестация и тренажёр.\n'
+                'Руководитель — корпоративный доступ и прогресс команды.\n\n'
                 'Выберите пользователя:')
         return text, markup
 
@@ -498,11 +535,6 @@ def main():
         bot.send_message(chat_id, text, reply_markup=markup)
 
     def send_access_user_card(chat_id, user_id, edit_message=None):
-        """Open an access card even when Telegram refuses to edit the old message.
-
-        Inline buttons otherwise only blink on the client when an edit fails (for
-        example, after a stale callback). A fresh message is a safe fallback.
-        """
         ensure_access_schema(path)
         text, markup = access_user_card(user_id)
         if edit_message is not None:
@@ -524,7 +556,7 @@ def main():
         lines = ['ПРОГРЕСС КОМАНДЫ', '']
         markup = telebot.types.InlineKeyboardMarkup(row_width=1)
         if not rows:
-            lines.append('Пока нет сотрудников с корпоративным доступом. Назначьте роль в разделе «Доступ сотрудников».')
+            lines.append('Пока нет сотрудников с корпоративным доступом.')
         for row in rows:
             user_id = int(row['user_id'])
             name = latest_user_name(user_id)
@@ -558,7 +590,7 @@ def main():
     def send_employee_route(user_id):
         result = admission.assess(path, user_id)
         text = ('ВАШ УЧЕБНЫЙ МАРШРУТ\n\n' + admission.employee_text(result) +
-                '\n\nСледующий шаг: откройте «Аттестация» или выберите тренировку по слабому навыку.')
+                '\n\nСледующий шаг: откройте «Аттестация» или перейдите к тренировке.')
         bot.send_message(user_id, text)
 
     def learning_message(chat_id, text, markup, edit_message=None):
@@ -575,13 +607,17 @@ def main():
     def learning_home(chat_id, section='knowledge', edit_message=None):
         snapshot = {item['id']: item for item in progress_snapshot(path, chat_id)}
         markup = telebot.types.InlineKeyboardMarkup(row_width=1)
-        header = 'БАЗА ЗНАНИЙ АКЕНСО' if section == 'knowledge' else 'АТТЕСТАЦИЯ АКЕНСО'
-        lines = [header, '', 'Выберите модуль:' if section == 'knowledge' else 'Выберите модуль для короткой проверки знаний:']
+        if section == 'knowledge':
+            header = 'АКАДЕМИЯ АКЕНСО'
+            lines = [header, '', 'Ваш учебный маршрут. Выберите раздел:']
+        else:
+            header = 'АТТЕСТАЦИЯ АКЕНСО'
+            lines = [header, '', 'Выберите раздел для короткой проверки знаний:']
         for module_id, item in MODULE_CONTENT.items():
             latest = snapshot[module_id].get('latest_assessment')
             status = 'не начат'
             if latest:
-                status = f"последняя попытка: {latest['score']}%"
+                status = f"результат: {latest['score']}%"
             elif snapshot[module_id]['status'] == 'in_progress':
                 status = 'в процессе'
             prefix = '📘' if section == 'knowledge' else '📝'
@@ -591,15 +627,16 @@ def main():
             ))
         if section == 'assessment':
             markup.add(telebot.types.InlineKeyboardButton('📊 Итоговый допуск', callback_data='learn:admission'))
-        lines += ['', 'Проходной результат каждого теста — 80%. Итоговый балл допуска формируется после трёх модулей по шкале 0–10; минимальный допуск — 7,0.']
-        text = '\n'.join(lines)
-        learning_message(chat_id, text, markup, edit_message)
+            lines += ['', 'Проходной результат каждого теста — 80%. Итоговый допуск — от 7,0 по шкале 0–10.']
+        else:
+            lines += ['', 'Можно остановиться после любого раздела и вернуться к обучению позже.']
+        learning_message(chat_id, '\n'.join(lines), markup, edit_message)
 
     def learning_module(chat_id, module_id, edit_message=None):
         item = MODULE_CONTENT[module_id]
         markup = telebot.types.InlineKeyboardMarkup(row_width=1)
         markup.add(telebot.types.InlineKeyboardButton('📝 Пройти аттестацию', callback_data=f'learn:start:{module_id}'))
-        markup.add(telebot.types.InlineKeyboardButton('← К модулям', callback_data='learn:home:knowledge'))
+        markup.add(telebot.types.InlineKeyboardButton('← К разделам', callback_data='learn:home:knowledge'))
         learning_message(chat_id, item['body'], markup, edit_message)
 
     def learning_admission(chat_id, edit_message=None):
@@ -610,18 +647,37 @@ def main():
         learning_message(chat_id, text, markup, edit_message)
         return result
 
+    def own_progress_text(user_id):
+        rows = progress_snapshot(path, user_id)
+        labels = {'not_started': 'не начат', 'in_progress': 'в процессе', 'completed': 'пройден'}
+        lines = ['МОЙ ПРОГРЕСС', '']
+        for item in rows:
+            latest = item.get('latest_assessment')
+            suffix = labels.get(item.get('status'), item.get('status', 'не начат'))
+            if latest:
+                suffix += f" · тест {latest['score']}%"
+            lines.append(f"• {item['title']}: {suffix}")
+        return '\n'.join(lines)
+
     def notify_supervisors(user_id, result):
         if not result['complete']:
             return
         employee_name = latest_user_name(user_id)
         text = admission.supervisor_text(employee_name, result)
-        for admin_id in admins:
-            if int(admin_id) == int(user_id):
+        supervisor_ids = set(admins)
+        try:
+            with store.db() as db:
+                for row in db.execute('SELECT user_id FROM user_access WHERE role=?', (SUPERVISOR,)).fetchall():
+                    supervisor_ids.add(int(row['user_id']))
+        except Exception:
+            pass
+        for supervisor_id in supervisor_ids:
+            if int(supervisor_id) == int(user_id):
                 continue
             try:
-                bot.send_message(admin_id, text)
+                bot.send_message(supervisor_id, text)
             except Exception:
-                LOG.exception('Could not deliver admission report admin=%s user=%s', admin_id, user_id)
+                LOG.exception('Could not deliver admission report supervisor=%s user=%s', supervisor_id, user_id)
 
     def assessment_question(chat_id, question, edit_message):
         markup = telebot.types.InlineKeyboardMarkup(row_width=1)
@@ -642,15 +698,7 @@ def main():
             if str(text).startswith(('Завершаю тренировку.', 'Разбор уже формируется.')):
                 markup = telebot.types.ReplyKeyboardRemove()
             else:
-                s = store.current(user_id)
-                markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
-                rows = keyboard_rows(s, bool(store.failed(user_id)), user_id in admins)
-                if s.get('phase') not in ('active', 'closed') and has_company_access(path, user_id):
-                    rows.append(['База знаний', 'Аттестация'])
-                if s.get('phase') not in ('active', 'closed') and user_id in admins:
-                    rows.append(['Доступ сотрудников', 'Прогресс команды'])
-                for row in rows:
-                    markup.row(*[telebot.types.KeyboardButton(v) for v in row])
+                markup = _reply_markup(context_rows(user_id))
         except Exception:
             markup = None
         for part in chunks(str(text)):
@@ -662,43 +710,68 @@ def main():
 
     @bot.message_handler(content_types=['text'])
     def on_text(message):
+        chat_id = message.chat.id
         cmd = normalize_command(message.text or '')
-        if cmd in ('/sessions', 'сессии пользователей'):
-            if message.chat.id in admins:
-                send_admin_sessions(message.chat.id, 0)
+        role = get_role(path, chat_id)
+
+        if cmd in ('/sessions', 'сессии пользователей', 'технические сессии'):
+            if chat_id in admins:
+                set_context(chat_id, CONTEXT_MANAGEMENT)
+                send_admin_sessions(chat_id, 0)
             else:
-                send(message.chat.id, 'Сессии пользователей доступны только администратору.')
+                send(chat_id, 'Сессии других пользователей доступны только администратору системы.')
             return
-        if cmd in ('/access', 'доступ сотрудников'):
-            if message.chat.id in admins:
-                send_admin_access(message.chat.id)
+        if cmd in ('/access', 'доступ сотрудников', 'управление доступом'):
+            if chat_id in admins:
+                set_context(chat_id, CONTEXT_MANAGEMENT)
+                send_admin_access(chat_id)
             else:
-                send(message.chat.id, 'Управление доступом доступно только администратору.')
+                send(chat_id, 'Управление доступом доступно только администратору системы.')
             return
         if cmd in ('/akenso', 'выдать себе доступ акенсо'):
-            if message.chat.id not in admins:
-                send(message.chat.id, 'Эта команда доступна только руководителю.')
+            if chat_id not in admins:
+                send(chat_id, 'Эта команда доступна только администратору.')
                 return
-            set_role(path, message.chat.id, AKENSO)
-            send(message.chat.id, 'Корпоративный доступ АКЕНСО включён. Откройте «База знаний» или «Аттестация».')
+            set_role(path, chat_id, SUPERVISOR)
+            activate_context(chat_id, CONTEXT_HOME, 'Корпоративный доступ руководителя АКЕНСО включён.')
             return
-        if cmd in ('/team', 'прогресс команды'):
-            if message.chat.id in admins:
-                team_progress_page(message.chat.id)
+        if cmd in ('/team', 'прогресс команды', 'команда'):
+            if role == SUPERVISOR or chat_id in admins:
+                activate_context(chat_id, CONTEXT_MANAGEMENT, '👥 Раздел руководителя')
+                team_progress_page(chat_id)
             else:
-                send(message.chat.id, 'Прогресс команды доступен только руководителю.')
+                send(chat_id, 'Прогресс команды доступен только руководителю.')
             return
-        if cmd == 'база знаний':
-            if has_company_access(path, message.chat.id):
-                learning_home(message.chat.id, 'knowledge')
+        if cmd in ('база знаний', 'продолжить обучение'):
+            if has_company_access(path, chat_id):
+                activate_context(chat_id, CONTEXT_LEARNING, '📚 Обучение')
+                learning_home(chat_id, 'knowledge')
             else:
-                send(message.chat.id, 'База знаний доступна только сотрудникам подключённой компании.')
+                send(chat_id, 'Обучение доступно только сотрудникам подключённой компании.')
             return
         if cmd == 'аттестация':
-            if has_company_access(path, message.chat.id):
-                learning_home(message.chat.id, 'assessment')
+            if has_company_access(path, chat_id):
+                activate_context(chat_id, CONTEXT_ASSESSMENT, '🎓 Аттестация')
+                learning_home(chat_id, 'assessment')
             else:
-                send(message.chat.id, 'Аттестация доступна только сотрудникам подключённой компании.')
+                send(chat_id, 'Аттестация доступна только сотрудникам подключённой компании.')
+            return
+        if cmd == 'мой прогресс':
+            if has_company_access(path, chat_id):
+                bot.send_message(chat_id, own_progress_text(chat_id), reply_markup=_reply_markup(context_rows(chat_id)))
+            else:
+                send(chat_id, 'Прогресс обучения доступен сотрудникам подключённой компании.')
+            return
+        if cmd == 'к академии':
+            if has_company_access(path, chat_id):
+                activate_context(chat_id, CONTEXT_HOME, '🏠 Академия АКЕНСО')
+            else:
+                set_context(chat_id, CONTEXT_TRAINING)
+                send(chat_id, 'Открываю тренажёр.')
+            return
+        if cmd == 'тренировка':
+            set_context(chat_id, CONTEXT_TRAINING)
+            send(chat_id, '🎭 Режим тренировки. Выберите действие ниже.')
             return
         module_commands = {
             'продукт': 'product',
@@ -706,21 +779,34 @@ def main():
             'регламенты': 'regulations',
         }
         if cmd in module_commands:
-            if has_company_access(path, message.chat.id):
-                learning_module(message.chat.id, module_commands[cmd])
+            if has_company_access(path, chat_id):
+                activate_context(chat_id, CONTEXT_LEARNING)
+                learning_module(chat_id, module_commands[cmd])
             else:
-                send(message.chat.id, 'База знаний доступна только сотрудникам подключённой компании.')
+                send(chat_id, 'Обучение доступно только сотрудникам подключённой компании.')
             return
-        receive_text(store, f'tg:{message.chat.id}:{message.message_id}', message.chat.id, message.chat.id,
+
+        # Text entered while browsing Academy must never accidentally become a manager
+        # replica in the sales simulation. The user explicitly enters Training first.
+        if has_company_access(path, chat_id) and current_context(chat_id) != CONTEXT_TRAINING:
+            bot.send_message(
+                chat_id,
+                'Вы сейчас в Академии. Выберите действие кнопкой ниже или перейдите в «Тренировка».',
+                reply_markup=_reply_markup(context_rows(chat_id)),
+            )
+            return
+
+        receive_text(store, f'tg:{chat_id}:{message.message_id}', chat_id, chat_id,
                      'text', message.text or '', send)
 
     @bot.callback_query_handler(func=lambda call: str(call.data or '').startswith('team:'))
     def on_team_callback(call):
         chat_id = call.message.chat.id
-        if chat_id not in admins:
+        if get_role(path, chat_id) != SUPERVISOR and chat_id not in admins:
             bot.answer_callback_query(call.id, 'Доступно только руководителю.', show_alert=True)
             return
         try:
+            set_context(chat_id, CONTEXT_MANAGEMENT)
             parts = str(call.data).split(':')
             action = parts[1]
             if action == 'list':
@@ -751,6 +837,17 @@ def main():
         try:
             parts = str(call.data).split(':')
             action = parts[1]
+            if action in ('start', 'answer', 'admission') or (action == 'home' and len(parts) > 2 and parts[2] == 'assessment'):
+                if current_context(chat_id) != CONTEXT_ASSESSMENT:
+                    activate_context(chat_id, CONTEXT_ASSESSMENT, '🎓 Аттестация')
+                else:
+                    set_context(chat_id, CONTEXT_ASSESSMENT)
+            else:
+                if current_context(chat_id) != CONTEXT_LEARNING:
+                    activate_context(chat_id, CONTEXT_LEARNING, '📚 Обучение')
+                else:
+                    set_context(chat_id, CONTEXT_LEARNING)
+
             if action == 'home':
                 learning_home(chat_id, parts[2], call.message.message_id)
             elif action == 'read':
@@ -771,7 +868,7 @@ def main():
                     text = (f"АТТЕСТАЦИЯ {verdict.upper()}\n\n"
                             f"Результат: {result['correct']} из {result['total']} · {result['score']}%\n"
                             f"Проходной порог: 80%.\n\n"
-                            + ('Модуль отмечен как пройденный.' if result['passed'] else 'Повторите модуль и попробуйте ещё раз.'))
+                            + ('Модуль отмечен как пройденный.' if result['passed'] else 'Повторите раздел и попробуйте ещё раз.'))
                     markup = telebot.types.InlineKeyboardMarkup(row_width=1)
                     markup.add(telebot.types.InlineKeyboardButton('← К аттестациям', callback_data='learn:home:assessment'))
                     learning_message(chat_id, text, markup, call.message.message_id)
@@ -788,7 +885,7 @@ def main():
         except Exception:
             LOG.exception('Learning callback failed')
             try:
-                bot.answer_callback_query(call.id, 'Не удалось открыть учебный модуль. Попробуйте ещё раз.', show_alert=True)
+                bot.answer_callback_query(call.id, 'Не удалось открыть учебный раздел. Попробуйте ещё раз.', show_alert=True)
             except Exception:
                 pass
 
@@ -799,6 +896,7 @@ def main():
             bot.answer_callback_query(call.id, 'Доступно только администратору.', show_alert=True)
             return
         try:
+            set_context(chat_id, CONTEXT_MANAGEMENT)
             parts = str(call.data).split(':')
             action = parts[1]
             if action == 'sessions':
@@ -840,6 +938,7 @@ def main():
             bot.answer_callback_query(call.id, 'Доступно только администратору.', show_alert=True)
             return
         try:
+            set_context(chat_id, CONTEXT_MANAGEMENT)
             parts = str(call.data).split(':')
             action = parts[1]
             if action == 'list':
@@ -868,12 +967,18 @@ def main():
 
     @bot.message_handler(content_types=['voice'])
     def on_voice(message):
-        receive_text(store, f'tg:{message.chat.id}:{message.message_id}', message.chat.id, message.chat.id,
+        chat_id = message.chat.id
+        if has_company_access(path, chat_id) and current_context(chat_id) != CONTEXT_TRAINING:
+            bot.send_message(
+                chat_id,
+                'Голосовое не отправлено в тренажёр: вы сейчас в Академии. Сначала откройте «Тренировка».',
+                reply_markup=_reply_markup(context_rows(chat_id)),
+            )
+            return
+        receive_text(store, f'tg:{chat_id}:{message.message_id}', chat_id, chat_id,
                      'voice', message.voice.file_id, send)
 
     try:
-        # Telegram remembers the previous filter when this argument is omitted.
-        # A messages-only filter silently drops every inline button callback.
         LOG.info('Startup: polling allowed_updates=%s callback_handlers=%s',
                  TELEGRAM_ALLOWED_UPDATES, len(bot.callback_query_handlers))
         bot.infinity_polling(skip_pending=True, timeout=30, long_polling_timeout=30,
