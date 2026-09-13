@@ -592,6 +592,13 @@ def main():
         markup.add(telebot.types.InlineKeyboardButton('← К модулям', callback_data='learn:home:knowledge'))
         bot.edit_message_text(item['body'], chat_id, edit_message, reply_markup=markup)
 
+    def send_learning_module_text(chat_id, module_id):
+        item = MODULE_CONTENT[module_id]
+        bot.send_message(
+            chat_id,
+            item['body'] + '\n\nКогда изучите модуль, отправьте «Тест: ' + item['title'].split(' · ')[0] + '».',
+        )
+
     def learning_admission(chat_id, edit_message=None):
         result = admission.assess(path, chat_id)
         text = admission.employee_text(result)
@@ -692,6 +699,17 @@ def main():
                 learning_home(message.chat.id, 'assessment')
             else:
                 send(message.chat.id, 'Аттестация доступна только сотрудникам подключённой компании.')
+            return
+        module_commands = {
+            'продукт': 'product',
+            'техники продаж': 'sales',
+            'регламенты': 'regulations',
+        }
+        if cmd in module_commands:
+            if has_company_access(path, message.chat.id):
+                send_learning_module_text(message.chat.id, module_commands[cmd])
+            else:
+                send(message.chat.id, 'База знаний доступна только сотрудникам подключённой компании.')
             return
         receive_text(store, f'tg:{message.chat.id}:{message.message_id}', message.chat.id, message.chat.id,
                      'text', message.text or '', send)
