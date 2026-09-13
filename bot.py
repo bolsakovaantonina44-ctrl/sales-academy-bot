@@ -20,6 +20,7 @@ from academy import assessment
 from academy import admission
 
 LOG = logging.getLogger('academy')
+TELEGRAM_ALLOWED_UPDATES = ['message', 'callback_query']
 FOCUS_LABELS = [v['label'] for v in FOCUS_OBJECTIONS.values()]
 ROLE_LABELS = {PUBLIC: 'Публичный', AKENSO: 'АКЕНСО', SUPERVISOR: 'Руководитель'}
 
@@ -314,8 +315,9 @@ def main():
         ('TELEGRAM_TOKEN', os.getenv('TELEGRAM_TOKEN')),
         ('LEGACY_BOT_TOKEN', os.getenv('LEGACY_BOT_TOKEN')),
     ))
-    LOG.info('Startup: Telegram bot=@%s token_source=%s webhook_active=%s pending_updates=%s',
-             identity.username, token_source, bool(webhook.url), webhook.pending_update_count)
+    LOG.info('Startup: Telegram bot=@%s token_source=%s webhook_active=%s pending_updates=%s previous_allowed_updates=%s',
+             identity.username, token_source, bool(webhook.url), webhook.pending_update_count,
+             getattr(webhook, 'allowed_updates', None))
     admins = [int(v.strip()) for v in os.getenv('ADMIN_IDS', '').split(',') if v.strip()]
     engine = Engine(store, ai, limit=int(os.getenv('FREE_TRAININGS', '3')), admin_ids=admins)
 
@@ -559,6 +561,17 @@ def main():
                 '\n\nСледующий шаг: откройте «Аттестация» или выберите тренировку по слабому навыку.')
         bot.send_message(user_id, text)
 
+    def learning_message(chat_id, text, markup, edit_message=None):
+        """Keep navigation usable if Telegram cannot edit an older menu."""
+        parts = chunks(text, limit=3800)
+        if edit_message is not None and len(parts) == 1:
+            try:
+                return bot.edit_message_text(text, chat_id, edit_message, reply_markup=markup)
+            except Exception as exc:
+                LOG.warning('Learning edit failed; sending new message kind=%s', type(exc).__name__)
+        for index, part in enumerate(parts):
+            bot.send_message(chat_id, part, reply_markup=markup if index == len(parts) - 1 else None)
+
     def learning_home(chat_id, section='knowledge', edit_message=None):
         snapshot = {item['id']: item for item in progress_snapshot(path, chat_id)}
         markup = telebot.types.InlineKeyboardMarkup(row_width=1)
@@ -580,34 +593,21 @@ def main():
             markup.add(telebot.types.InlineKeyboardButton('📊 Итоговый допуск', callback_data='learn:admission'))
         lines += ['', 'Проходной результат каждого теста — 80%. Итоговый балл допуска формируется после трёх модулей по шкале 0–10; минимальный допуск — 7,0.']
         text = '\n'.join(lines)
-        if edit_message is not None:
-            bot.edit_message_text(text, chat_id, edit_message, reply_markup=markup)
-        else:
-            bot.send_message(chat_id, text, reply_markup=markup)
+        learning_message(chat_id, text, markup, edit_message)
 
-    def learning_module(chat_id, module_id, edit_message):
+    def learning_module(chat_id, module_id, edit_message=None):
         item = MODULE_CONTENT[module_id]
         markup = telebot.types.InlineKeyboardMarkup(row_width=1)
         markup.add(telebot.types.InlineKeyboardButton('📝 Пройти аттестацию', callback_data=f'learn:start:{module_id}'))
         markup.add(telebot.types.InlineKeyboardButton('← К модулям', callback_data='learn:home:knowledge'))
-        bot.edit_message_text(item['body'], chat_id, edit_message, reply_markup=markup)
-
-    def send_learning_module_text(chat_id, module_id):
-        item = MODULE_CONTENT[module_id]
-        bot.send_message(
-            chat_id,
-            item['body'] + '\n\nКогда изучите модуль, отправьте «Тест: ' + item['title'].split(' · ')[0] + '».',
-        )
+        learning_message(chat_id, item['body'], markup, edit_message)
 
     def learning_admission(chat_id, edit_message=None):
         result = admission.assess(path, chat_id)
         text = admission.employee_text(result)
         markup = telebot.types.InlineKeyboardMarkup(row_width=1)
         markup.add(telebot.types.InlineKeyboardButton('← К аттестациям', callback_data='learn:home:assessment'))
-        if edit_message is not None:
-            bot.edit_message_text(text, chat_id, edit_message, reply_markup=markup)
-        else:
-            bot.send_message(chat_id, text, reply_markup=markup)
+        learning_message(chat_id, text, markup, edit_message)
         return result
 
     def notify_supervisors(user_id, result):
@@ -631,7 +631,7 @@ def main():
             ))
         text = (f"АТТЕСТАЦИЯ · {MODULE_CONTENT[question['module_id']]['title']}\n"
                 f"Вопрос {question['index'] + 1} из {question['total']}\n\n{question['question']}")
-        bot.edit_message_text(text, chat_id, edit_message, reply_markup=markup)
+        learning_message(chat_id, text, markup, edit_message)
 
     def send(chat_id, text):
         if str(text).startswith('__academy_pdf__:'):
@@ -707,7 +707,7 @@ def main():
         }
         if cmd in module_commands:
             if has_company_access(path, message.chat.id):
-                send_learning_module_text(message.chat.id, module_commands[cmd])
+                learning_module(message.chat.id, module_commands[cmd])
             else:
                 send(message.chat.id, 'База знаний доступна только сотрудникам подключённой компании.')
             return
@@ -774,7 +774,7 @@ def main():
                             + ('Модуль отмечен как пройденный.' if result['passed'] else 'Повторите модуль и попробуйте ещё раз.'))
                     markup = telebot.types.InlineKeyboardMarkup(row_width=1)
                     markup.add(telebot.types.InlineKeyboardButton('← К аттестациям', callback_data='learn:home:assessment'))
-                    bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+                    learning_message(chat_id, text, markup, call.message.message_id)
                     overall = admission.assess(path, chat_id)
                     if overall['complete']:
                         bot.send_message(chat_id, admission.employee_text(overall))
@@ -872,10 +872,16 @@ def main():
                      'voice', message.voice.file_id, send)
 
     try:
-        bot.infinity_polling(skip_pending=True, timeout=30, long_polling_timeout=30)
+        # Telegram remembers the previous filter when this argument is omitted.
+        # A messages-only filter silently drops every inline button callback.
+        LOG.info('Startup: polling allowed_updates=%s callback_handlers=%s',
+                 TELEGRAM_ALLOWED_UPDATES, len(bot.callback_query_handlers))
+        bot.infinity_polling(skip_pending=True, timeout=30, long_polling_timeout=30,
+                             allowed_updates=TELEGRAM_ALLOWED_UPDATES)
     finally:
         stop.set()
         thread.join(timeout=2)
+        lock.close()
 
 
 if __name__ == '__main__':
