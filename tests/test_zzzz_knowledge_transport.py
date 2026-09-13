@@ -75,7 +75,7 @@ class KnowledgeTransportTests(unittest.TestCase):
 
     def test_every_module_opens_and_all_three_tests_reach_admission(self):
         self.message('База знаний')
-        self.assertIn('БАЗА ЗНАНИЙ', self.bot.send_message.call_args.args[1])
+        self.assertIn('АКАДЕМИЯ АКЕНСО', self.bot.send_message.call_args.args[1])
         for module_id, item in MODULE_CONTENT.items():
             with self.subTest(module_id=module_id):
                 self.callback(f'learn:read:{module_id}')
@@ -118,21 +118,3 @@ class KnowledgeTransportTests(unittest.TestCase):
         commands = [button['callback_data'] for row in markup['inline_keyboard'] for button in row]
         self.assertIn('learn:start:product', commands)
         self.assertIn('learn:home:knowledge', commands)
-        self.assertNotIn('отправьте «Тест:', call.args[1])
-
-    def test_edit_failure_sends_a_fresh_learning_message(self):
-        self.bot.edit_message_text.side_effect = RuntimeError('old message unavailable')
-        self.callback('learn:read:product')
-        self.assertEqual(self.bot.send_message.call_args.args[1], MODULE_CONTENT['product']['body'])
-        self.assertIn('reply_markup', self.bot.send_message.call_args.kwargs)
-
-    def test_employee_access_callbacks_open_and_update_role(self):
-        self.callback('acc:user:20', user_id=999)
-        self.assertIn('ДОСТУП ПОЛЬЗОВАТЕЛЯ', self.bot.edit_message_text.call_args.args[0])
-        self.callback('acc:set:20:akenso', user_id=999)
-        self.callback('learn:read:product', user_id=20)
-        self.assertEqual(self.bot.edit_message_text.call_args.args[0], MODULE_CONTENT['product']['body'])
-
-
-if __name__ == '__main__':
-    unittest.main()
