@@ -1,8 +1,8 @@
 """Role- and context-aware Telegram UI policy for Academy navigation.
 
-Pure functions only: no Telegram or database dependencies.  The transport layer can
-render these rows as reply keyboards while keeping learning, training and management
-contexts isolated from one another.
+Pure functions only: no Telegram or database dependencies. The transport layer renders
+these rows as reply keyboards while keeping learning, training and management contexts
+isolated from one another.
 """
 
 PUBLIC = 'public'
@@ -17,10 +17,6 @@ CONTEXT_RESULT = 'result'
 CONTEXT_MANAGEMENT = 'management'
 
 
-def _is_supervisor(role):
-    return role == SUPERVISOR
-
-
 def academy_home_rows(role):
     """Minimal Academy home. Technical/admin actions never appear here."""
     if role == PUBLIC:
@@ -30,7 +26,7 @@ def academy_home_rows(role):
         ['Тренировка', 'Аттестация'],
         ['Мой прогресс'],
     ]
-    if _is_supervisor(role):
+    if role == SUPERVISOR:
         rows.append(['Команда'])
     return rows
 
@@ -75,14 +71,17 @@ def training_rows(role, phase):
 
 
 def management_rows(role, is_admin=False):
-    """Manager and technical administration are deliberately separate surfaces."""
-    if not _is_supervisor(role) and not is_admin:
+    """Supervisor functions and technical administration are separate surfaces.
+
+    Employee session browsing stays hidden until a dedicated supervisor-safe view is
+    implemented. This avoids accidentally exposing another employee's raw sessions.
+    """
+    if role != SUPERVISOR and not is_admin:
         return []
     rows = []
-    if _is_supervisor(role):
+    if role == SUPERVISOR:
         rows.extend([
             ['Прогресс команды'],
-            ['Сессии сотрудников'],
             ['К Академии'],
         ])
     if is_admin:
