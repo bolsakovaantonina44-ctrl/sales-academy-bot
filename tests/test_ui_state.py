@@ -1,7 +1,5 @@
 import sqlite3
 
-import pytest
-
 from academy.ui_state import (
     HOME,
     LEARNING,
@@ -38,8 +36,12 @@ def test_all_supported_contexts_round_trip(tmp_path):
 
 def test_invalid_context_is_rejected(tmp_path):
     db = tmp_path / 'academy.sqlite3'
-    with pytest.raises(ValueError):
+    try:
         set_context(db, 101, 'admin_everything')
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('invalid UI context must raise ValueError')
 
 
 def test_reset_returns_to_home(tmp_path):
