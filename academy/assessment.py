@@ -33,7 +33,7 @@ def _ensure(path):
 
 
 def _question_for(user_id, module_id, index):
-    """Return one question with a stable per-user rotation of answer positions."""
+    """Return one question with stable rotation and mobile-readable answer choices."""
     source = QUESTION_BANK[module_id][int(index)]
     data = dict(source)
     options = list(source["options"])
@@ -41,10 +41,15 @@ def _question_for(user_id, module_id, index):
         module_salt = {"product": 0, "sales": 1, "regulations": 2}.get(module_id, 0)
         shift = (int(user_id) + int(index) + module_salt) % len(options)
         if shift:
-            data["options"] = options[shift:] + options[:shift]
+            options = options[shift:] + options[:shift]
             data["correct"] = (int(source["correct"]) - shift) % len(options)
-        else:
-            data["options"] = options
+
+        # Telegram truncates long inline-button labels on phones. Keep the full
+        # answer text inside the message and use only short letter buttons.
+        letters = ("А", "Б", "В", "Г", "Д", "Е")
+        answer_lines = [f"{letters[pos]}. {option}" for pos, option in enumerate(options)]
+        data["question"] = source["question"] + "\n\nВарианты ответа:\n" + "\n".join(answer_lines)
+        data["options"] = list(letters[:len(options)])
     return data
 
 
