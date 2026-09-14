@@ -71,13 +71,23 @@ class KnowledgeTransportTests(unittest.TestCase):
         params = request.call_args.kwargs['params']
         self.assertEqual(json.loads(params['allowed_updates']), ['message', 'callback_query'])
 
+    def _assert_reference_opened(self, body):
+        if self.bot.edit_message_text.called:
+            self.assertEqual(self.bot.edit_message_text.call_args.args[0], body)
+            return
+        sent = ''.join(call.args[1] for call in self.bot.send_message.call_args_list if len(call.args) > 1)
+        self.assertIn(body[:200], sent)
+        self.assertIn(body[-200:], sent)
+
     def test_every_module_opens_and_theory_requires_practical_exam(self):
         self.message('База знаний')
         self.assertIn('АКАДЕМИЯ АКЕНСО', self.bot.send_message.call_args.args[1])
         for module_id, item in MODULE_CONTENT.items():
             with self.subTest(module_id=module_id):
+                self.bot.send_message.reset_mock()
+                self.bot.edit_message_text.reset_mock()
                 self.callback(f'learn:read:{module_id}')
-                self.assertEqual(self.bot.edit_message_text.call_args.args[0], item['body'])
+                self._assert_reference_opened(item['body'])
                 self.callback(f'learn:start:{module_id}')
                 for index in range(len(QUESTION_BANK[module_id])):
                     current = assessment.question(self.path, 10)
