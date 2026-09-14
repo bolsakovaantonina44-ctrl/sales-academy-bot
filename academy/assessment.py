@@ -1,9 +1,9 @@
-"""Durable state machine for one short knowledge attestation."""
+"""Durable state machine for one knowledge attestation module."""
 import json
 import sqlite3
 from datetime import datetime, timezone
 
-from .curriculum import QUESTION_BANK, PASS_PERCENT
+from .attestation_bank import QUESTION_BANK, PASS_PERCENT
 from .learning import MODULE_IDS, ensure_learning_schema, record_assessment, set_progress
 
 
@@ -84,7 +84,6 @@ def answer(path, user_id, answer_index):
             db.execute("DELETE FROM active_assessments WHERE user_id=?", (int(user_id),))
             result.update(finished=True)
             finished = True
-    # The transaction must close before question() opens its own read connection.
     if not finished:
         return {"finished": False, "question": question(path, user_id)}
     return result
