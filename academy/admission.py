@@ -1,6 +1,7 @@
-"""Combine knowledge tests with a mandatory practical trainer result."""
+"""Combine knowledge tests with a mandatory designated practical trainer result."""
 import json
 import sqlite3
+from datetime import datetime, timezone
 
 from .domain import upgrade_session
 from .learning import MODULES, progress_snapshot
@@ -30,14 +31,57 @@ MODULE_RECOMMENDATIONS = {
 }
 
 
+def _ensure_practical_schema(path):
+    with sqlite3.connect(str(path), timeout=30) as db:
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS practical_exam_state(
+                user_id INTEGER PRIMARY KEY,
+                baseline_session_id INTEGER NOT NULL DEFAULT 0,
+                started_at TEXT NOT NULL
+            )
+        """)
+
+
+def start_practical_exam(path, user_id):
+    """Mark the current training-session boundary so historical practice cannot satisfy admission."""
+    _ensure_practical_schema(path)
+    with sqlite3.connect(str(path), timeout=30) as db:
+        try:
+            row = db.execute("SELECT COALESCE(MAX(id),0) FROM sessions WHERE user_id=?", (int(user_id),)).fetchone()
+            baseline = int(row[0] or 0)
+        except sqlite3.Error:
+            baseline = 0
+        db.execute("""
+            INSERT INTO practical_exam_state(user_id,baseline_session_id,started_at)
+            VALUES(?,?,?)
+            ON CONFLICT(user_id) DO UPDATE SET
+              baseline_session_id=excluded.baseline_session_id,
+              started_at=excluded.started_at
+        """, (int(user_id), baseline, datetime.now(timezone.utc).isoformat()))
+    return baseline
+
+
+def _practical_baseline(path, user_id):
+    _ensure_practical_schema(path)
+    with sqlite3.connect(str(path), timeout=30) as db:
+        row = db.execute(
+            "SELECT baseline_session_id FROM practical_exam_state WHERE user_id=?",
+            (int(user_id),),
+        ).fetchone()
+    return int(row[0]) if row else None
+
+
 def _latest_practice(path, user_id):
-    """Return the latest completed training with a validated 0-100 report."""
+    """Return latest validated completed training created after practical-exam start."""
+    baseline = _practical_baseline(path, user_id)
+    if baseline is None:
+        return None
     try:
         with sqlite3.connect(str(path), timeout=30) as db:
             db.row_factory = sqlite3.Row
             rows = db.execute(
-                "SELECT id,payload FROM sessions WHERE user_id=? ORDER BY id DESC LIMIT 30",
-                (int(user_id),),
+                "SELECT id,payload FROM sessions WHERE user_id=? AND id>? ORDER BY id DESC LIMIT 30",
+                (int(user_id), int(baseline)),
             ).fetchall()
     except sqlite3.Error:
         return None
@@ -64,10 +108,7 @@ def _latest_practice(path, user_id):
 def assess(path, user_id):
     modules = progress_snapshot(path, user_id)
     completed = [item for item in modules if item["latest_assessment"]]
-    scores = {
-        item["id"]: item["latest_assessment"]["score"]
-        for item in completed
-    }
+    scores = {item["id"]: item["latest_assessment"]["score"] for item in completed}
     missing_modules = [item for item in modules if item["id"] not in scores]
     practice = _latest_practice(path, user_id)
 
@@ -92,6 +133,12 @@ def assess(path, user_id):
     weak = [module_id for module_id, score in scores.items() if score < 80]
 
     if practice is None:
+        started = _practical_baseline(path, user_id) is not None
+        recommendation = (
+            "Практический экзамен запущен. Проведите полноценный разговор и завершите его до проверенного разбора."
+            if started else
+            "Запустите «Практический экзамен» из Академии, затем проведите полноценный разговор до проверенного разбора."
+        )
         return {
             "complete": False,
             "passed": False,
@@ -103,12 +150,8 @@ def assess(path, user_id):
             "grade": None,
             "final_score": None,
             "decision": "Теория завершена. Нужен практический экзамен.",
-            "employee_recommendations": [
-                "Пройдите одну полноценную тренировку до проверенного итогового разбора. Именно практический разговор является обязательной частью допуска."
-            ],
-            "supervisor_recommendations": [
-                "Не считать сотрудника аттестованным только по тестам. Нужен проверенный результат тренажёра."
-            ],
+            "employee_recommendations": [recommendation],
+            "supervisor_recommendations": ["Не считать сотрудника аттестованным только по тестам. Нужен новый проверенный результат тренажёра."],
             "practice_cases": ["project"],
         }
 
@@ -140,11 +183,11 @@ def assess(path, user_id):
         passed = False
         employee = [MODULE_RECOMMENDATIONS[module_id] for module_id in weak]
         if practice_score < MIN_PRACTICE_SCORE:
-            employee.append("Практический разговор ниже минимального уровня: повторите тренажёр после разбора ошибок.")
+            employee.append("Практический разговор ниже минимального уровня: повторите практический экзамен после разбора ошибок.")
         if not employee:
             employee.append("Повторите практический экзамен и закрепите слабые навыки из отчёта.")
         supervisor = [
-            "Назначьте повторную тренировку по двум главным слабым навыкам вместо простого повторения тестов.",
+            "Назначьте повторную практику по двум главным слабым навыкам вместо простого повторения тестов.",
             "Допуск пересмотреть после нового проверенного практического разговора.",
         ]
 
