@@ -25,6 +25,22 @@ def _ensure(path):
         """)
 
 
+def _question_for(user_id, module_id, index):
+    """Return one question with a stable per-user rotation of answer positions."""
+    source = QUESTION_BANK[module_id][int(index)]
+    data = dict(source)
+    options = list(source["options"])
+    if options:
+        module_salt = {"product": 0, "sales": 1, "regulations": 2}.get(module_id, 0)
+        shift = (int(user_id) + int(index) + module_salt) % len(options)
+        if shift:
+            data["options"] = options[shift:] + options[:shift]
+            data["correct"] = (int(source["correct"]) - shift) % len(options)
+        else:
+            data["options"] = options
+    return data
+
+
 def start(path, user_id, module_id):
     if module_id not in MODULE_IDS:
         raise ValueError("Unknown learning module")
@@ -51,7 +67,7 @@ def question(path, user_id):
     index = int(row["question_index"])
     if not 0 <= index < len(questions):
         return None
-    data = dict(questions[index])
+    data = _question_for(user_id, row["module_id"], index)
     data.update(module_id=row["module_id"], index=index, total=len(questions))
     return data
 
@@ -77,8 +93,8 @@ def answer(path, user_id, answer_index):
             result = None
         else:
             correct = sum(
-                int(value == item["correct"])
-                for value, item in zip(answers, QUESTION_BANK[current["module_id"]])
+                int(value == _question_for(user_id, current["module_id"], idx)["correct"])
+                for idx, value in enumerate(answers)
             )
             result = record_assessment(path, user_id, current["module_id"], answers, correct, current["total"], PASS_PERCENT)
             db.execute("DELETE FROM active_assessments WHERE user_id=?", (int(user_id),))
