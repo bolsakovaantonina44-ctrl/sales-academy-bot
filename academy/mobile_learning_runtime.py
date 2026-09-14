@@ -5,6 +5,7 @@ trainer controls and uses inline buttons so stale training reply keyboards disap
 """
 import os
 import functools
+import time
 from types import SimpleNamespace
 
 import telebot
@@ -91,20 +92,13 @@ def _modules_markup(user_id):
 
 
 def _send_modules(bot, chat_id):
-    bot.send_message(
-        chat_id,
-        "БАЗА ЗНАНИЙ\n\nЗдесь можно открыть любой учебный раздел. Для первого прохождения используйте «Продолжить маршрут».",
-        reply_markup=_modules_markup(chat_id),
-    )
+    bot.send_message(chat_id, "БАЗА ЗНАНИЙ\n\nЗдесь можно открыть любой учебный раздел. Для первого прохождения используйте «Продолжить маршрут».", reply_markup=_modules_markup(chat_id))
 
 
 def _module_markup(module_id):
     markup = telebot.types.InlineKeyboardMarkup(row_width=1)
     for index, lesson in enumerate(ONBOARDING[module_id]["lessons"]):
-        markup.add(telebot.types.InlineKeyboardButton(
-            f"{index + 1}. {lesson['title']} · {lesson['minutes']} мин",
-            callback_data=f"academyv2:lesson:{module_id}:{index}",
-        ))
+        markup.add(telebot.types.InlineKeyboardButton(f"{index + 1}. {lesson['title']} · {lesson['minutes']} мин", callback_data=f"academyv2:lesson:{module_id}:{index}"))
     markup.add(telebot.types.InlineKeyboardButton("← К базе знаний", callback_data="academyv2:modules"))
     return markup
 
@@ -124,13 +118,7 @@ def _lesson_markup(module_id, index):
 
 def _send_lesson(bot, chat_id, module_id, index):
     lesson = ONBOARDING[module_id]["lessons"][int(index)]
-    bot.send_message(
-        chat_id,
-        f"{ONBOARDING[module_id]['title']} · урок {int(index) + 1}/{len(ONBOARDING[module_id]['lessons'])}\n"
-        f"{lesson['title']} · {lesson['minutes']} мин\n\n{lesson['body']}",
-        reply_markup=_lesson_markup(module_id, index),
-        disable_web_page_preview=True,
-    )
+    bot.send_message(chat_id, f"{ONBOARDING[module_id]['title']} · урок {int(index) + 1}/{len(ONBOARDING[module_id]['lessons'])}\n{lesson['title']} · {lesson['minutes']} мин\n\n{lesson['body']}", reply_markup=_lesson_markup(module_id, index), disable_web_page_preview=True)
 
 
 def _check_markup(module_id, index):
@@ -143,12 +131,7 @@ def _check_markup(module_id, index):
 
 def _send_checkpoint(bot, chat_id, module_id, index):
     lesson = ONBOARDING[module_id]["lessons"][int(index)]
-    bot.send_message(
-        chat_id,
-        "ПРОВЕРЬТЕ СЕБЯ\n\n" + lesson["checkpoint"] +
-        "\n\nОтветьте себе вслух или одной-двумя фразами. Это не аттестация: здесь важно суметь объяснить материал своими словами.",
-        reply_markup=_check_markup(module_id, index),
-    )
+    bot.send_message(chat_id, "ПРОВЕРЬТЕ СЕБЯ\n\n" + lesson["checkpoint"] + "\n\nОтветьте себе вслух или одной-двумя фразами. Это не аттестация: здесь важно суметь объяснить материал своими словами.", reply_markup=_check_markup(module_id, index))
 
 
 def _send_progress(bot, chat_id):
@@ -183,11 +166,7 @@ def _assessment_or_practice_markup():
 def _continue(bot, chat_id):
     target = next_lesson(_db_path(), chat_id)
     if target is None:
-        bot.send_message(
-            chat_id,
-            "Базовое обучение завершено. Порядок допуска: проверка знаний → практический экзамен → итоговый вердикт. Практика имеет основной вес.",
-            reply_markup=_assessment_or_practice_markup(),
-        )
+        bot.send_message(chat_id, "Базовое обучение завершено. Порядок допуска: проверка знаний → практический экзамен → итоговый вердикт. Практика имеет основной вес.", reply_markup=_assessment_or_practice_markup())
         return
     module_id, index, _ = target
     _send_lesson(bot, chat_id, module_id, index)
@@ -198,11 +177,7 @@ def _complete(bot, chat_id, module_id, index):
     mark_completed(_db_path(), chat_id, lesson["id"])
     upcoming = next_after(module_id, int(index))
     if upcoming is None:
-        bot.send_message(
-            chat_id,
-            "Базовый маршрут завершён. Теперь: проверка знаний → практический экзамен → итоговый вердикт.",
-            reply_markup=_assessment_or_practice_markup(),
-        )
+        bot.send_message(chat_id, "Базовый маршрут завершён. Теперь: проверка знаний → практический экзамен → итоговый вердикт.", reply_markup=_assessment_or_practice_markup())
         return
     next_module, next_index, next_item = upcoming
     markup = telebot.types.InlineKeyboardMarkup(row_width=1)
@@ -220,18 +195,21 @@ def _open_training(bot, chat_id, exam=False):
             bot.send_message(chat_id, "Сначала завершите все три проверки знаний. После этого откроется практический экзамен, который формирует основной вес допуска.", reply_markup=markup)
             return
         admission.start_practical_exam(_db_path(), chat_id)
-        bot.send_message(chat_id, "ПРАКТИЧЕСКИЙ ЭКЗАМЕН\n\nСейчас откроется тренажёр. Проведите полноценный разговор и завершите его до проверенного разбора. Только эта новая сессия попадёт в итоговый допуск.")
+        bot.send_message(chat_id, "ПРАКТИЧЕСКИЙ ЭКЗАМЕН\n\nСоздаю новую экзаменационную тренировку. Проведите полноценный разговор и завершите его до проверенного разбора. Только эта новая сессия попадёт в итоговый допуск.")
     else:
-        bot.send_message(chat_id, "ТРЕНАЖЁР\n\nОткрываю обычную практику. Она помогает тренироваться, но не заменяет итоговый практический экзамен.")
+        bot.send_message(chat_id, "ТРЕНАЖЁР\n\nСоздаю новую тренировку. Обычная практика не заменяет итоговый практический экзамен.")
 
     if _BOT_ON_TEXT_HANDLER is None:
-        # Safe fallback if the transport has not finished registering handlers yet.
         markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
-        markup.row(telebot.types.KeyboardButton("Тренировка"))
+        markup.row(telebot.types.KeyboardButton("Новая тренировка"))
         markup.row(telebot.types.KeyboardButton("К Академии"))
-        bot.send_message(chat_id, "Нажмите «Тренировка».", reply_markup=markup)
+        bot.send_message(chat_id, "Нажмите «Новая тренировка».", reply_markup=markup)
         return
-    fake = SimpleNamespace(chat=SimpleNamespace(id=chat_id), text="Тренировка")
+    fake = SimpleNamespace(
+        chat=SimpleNamespace(id=chat_id),
+        text="Новая тренировка",
+        message_id=int(time.time() * 1000),
+    )
     _BOT_ON_TEXT_HANDLER(fake)
 
 
@@ -295,8 +273,10 @@ def _handle_callback(bot, call):
             return True
         bot.answer_callback_query(call.id)
     except Exception:
-        try: bot.answer_callback_query(call.id, "Не удалось открыть раздел. Попробуйте ещё раз.", show_alert=True)
-        except Exception: pass
+        try:
+            bot.answer_callback_query(call.id, "Не удалось открыть раздел. Попробуйте ещё раз.", show_alert=True)
+        except Exception:
+            pass
     return True
 
 
@@ -317,7 +297,8 @@ def install():
             _BOT_ON_TEXT_HANDLER = handler
             @functools.wraps(handler)
             def wrapped(message):
-                if _handle_text(self, message): return None
+                if _handle_text(self, message):
+                    return None
                 return handler(message)
             return original_decorator(wrapped)
         return decorator
@@ -327,7 +308,8 @@ def install():
         def decorator(handler):
             @functools.wraps(handler)
             def wrapped(call):
-                if _handle_callback(self, call): return None
+                if _handle_callback(self, call):
+                    return None
                 result = handler(call)
                 _post_learning_answer(self, call)
                 return result
