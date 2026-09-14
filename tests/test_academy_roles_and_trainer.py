@@ -42,7 +42,7 @@ class AcademyRoleAndTrainerTests(unittest.TestCase):
         self.assertIn("team:list", callbacks)
         self.assertNotIn("acc:list", callbacks)
 
-    def test_regular_training_opens_existing_trainer_directly(self):
+    def test_regular_training_starts_a_fresh_trainer_session_directly(self):
         bot = FakeBot()
         handler = Mock()
         runtime._BOT_ON_TEXT_HANDLER = handler
@@ -50,7 +50,7 @@ class AcademyRoleAndTrainerTests(unittest.TestCase):
         handler.assert_called_once()
         fake_message = handler.call_args.args[0]
         self.assertEqual(fake_message.chat.id, 101)
-        self.assertEqual(fake_message.text, "Тренировка")
+        self.assertEqual(fake_message.text, "Новая тренировка")
 
     def test_exam_requires_theory_and_then_marks_fresh_boundary(self):
         bot = FakeBot()
@@ -68,6 +68,8 @@ class AcademyRoleAndTrainerTests(unittest.TestCase):
             runtime._open_training(bot, 101, exam=True)
             start.assert_called_once_with(self.path, 101)
             handler.assert_called_once()
+            fake_message = handler.call_args.args[0]
+            self.assertEqual(fake_message.text, "Новая тренировка")
 
 
 if __name__ == "__main__":
