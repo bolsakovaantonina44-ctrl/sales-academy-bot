@@ -3,8 +3,15 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 
-from .attestation_bank import QUESTION_BANK, PASS_PERCENT
+from .attestation_bank import QUESTION_BANK as BASE_QUESTION_BANK, PASS_PERCENT
+from .attestation_extensions import EXTRA_QUESTIONS
 from .learning import MODULE_IDS, ensure_learning_schema, record_assessment, set_progress
+
+
+QUESTION_BANK = {
+    module_id: list(BASE_QUESTION_BANK[module_id]) + list(EXTRA_QUESTIONS.get(module_id, ()))
+    for module_id in BASE_QUESTION_BANK
+}
 
 
 def _now():
