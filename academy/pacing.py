@@ -18,7 +18,7 @@ FOCUS_OBJECTIONS = {
     },
     'supplier': {
         'label': 'Уже работаем с другим',
-        'text': 'Мы уже работаем с другим поставщиком или исполнителем.',
+        'text': 'У нас уже есть поставщик, менять его сейчас не планируем.',
         'resolved_when': ('Менеджер выяснил, что устраивает и что важно в текущем поставщике или исполнителе, не атаковал конкурента '
                           'и нашёл критерий, при котором имеет смысл рассмотреть альтернативу.'),
     },
@@ -47,17 +47,15 @@ OFFER_CONTEXT_ACTIONS = {'monologue', 'relevant_argument', 'objection_work'}
 def prepare_card(card, difficulty, focus=None):
     card = copy.deepcopy(card)
     count = {'easy': 1, 'medium': 2, 'hard': 3}[difficulty]
-    # Existing template barriers keep their meaning but become spoken objections.
     spoken = {
         'comparable': 'У других дешевле.',
         'time': 'Сейчас нет времени на презентацию.',
-        'loyalty': 'Мы уже работаем с другим поставщиком или исполнителем.',
+        'loyalty': 'У нас уже есть поставщик, менять его сейчас не планируем.',
         'proof': 'Мне нужны подтверждения, а не обещания.',
     }
     for b in card['barriers']:
         b['text'] = spoken.get(b['id'], b['text'])
 
-    # A selected training focus is deterministic: the trainee must encounter it.
     if focus in FOCUS_OBJECTIONS:
         selected = FOCUS_OBJECTIONS[focus]
         focused = dict(id='focus_' + focus, text=selected['text'], resolved_when=selected['resolved_when'])
@@ -80,7 +78,9 @@ def prepare_card(card, difficulty, focus=None):
             card['barriers'].append(dict(id=ident, text=text, resolved_when=condition))
     card['barriers'] = card['barriers'][:count]
     if difficulty == 'hard':
-        card['opening'] = 'Здравствуйте. У меня мало времени. Коротко: по какому вопросу?'
+        # Hard mode should make the trainee earn access instead of being helped through the call.
+        # The client still remains professional: resistance comes from lack of relevance, not rudeness.
+        card['opening'] = 'Добрый день. У меня буквально минута. Что конкретно вы предлагаете и почему это может быть нам актуально?'
     return card
 
 
@@ -94,7 +94,6 @@ def apply_behavior(session, plan, state):
     old = session['state']
     barriers = session['card']['barriers']
     shown = set(old.get('presented_barriers', []))
-    # A barrier cannot silently disappear before the trainee encounters it.
     state['resolved'] = [i for i in state['resolved'] if i in shown]
     for b in barriers:
         if b['id'] not in state['resolved'] and state['issues'].get(b['id']) == 'resolved':
@@ -109,22 +108,20 @@ def apply_behavior(session, plan, state):
         state['interest'] = max(0, old['interest'] - 1)
     elif action in ('reflection', 'relevant_argument', 'objection_work'):
         state['trust'] = min(5, old['trust'] + 1)
-    # Information must be earned, one new fact at a time.
     fresh = [i for i in plan['reveal_ids'] if i not in old['revealed']]
     permitted = fresh[:1] if action in ('question', 'reflection', 'objection_work') and plan['intent'] != 'name' else []
+    # Hard mode is intentionally less generous: weak/generic questions do not unlock hidden context.
+    if session['fields']['difficulty'] == 'hard' and action == 'question' and old.get('trust', 0) <= 1:
+        permitted = []
     state['revealed'] = sorted(set(old['revealed']) | set(permitted))
     state['required_objection'] = ''
     state['required_objection_id'] = ''
     unseen = [b for b in barriers if b['id'] not in shown]
     forced_focus = state['close'] == 'refusal' and bool(unseen)
-    # A focused exercise must not end before the selected objection is ever spoken.
-    # The manager should get at least one real opportunity to handle the trained skill.
     if forced_focus:
         state['close'] = 'continue'
         state['agreement'] = old.get('agreement', '')
         state['ending_reason'] = ''
-    # Easy gives room to establish contact. Medium introduces resistance quickly.
-    # Hard keeps pressure throughout the conversation.
     schedule = {
         'easy': (3,),
         'medium': (1, 4),
