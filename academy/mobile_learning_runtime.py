@@ -34,19 +34,17 @@ def _admins():
 
 
 def _remove_reply_keyboard(bot, chat_id):
-    # One short transition message removes the old trainer keyboard reliably.
-    bot.send_message(
-        chat_id,
-        "Открываю Академию…",
-        reply_markup=telebot.types.ReplyKeyboardRemove(),
-    )
+    bot.send_message(chat_id, "Открываю Академию…", reply_markup=telebot.types.ReplyKeyboardRemove())
 
 
 def _home_markup(user_id):
+    p = progress(_db_path(), user_id)
     markup = telebot.types.InlineKeyboardMarkup(row_width=1)
-    markup.add(telebot.types.InlineKeyboardButton("▶️ Продолжить обучение", callback_data="academyv2:continue"))
-    markup.add(telebot.types.InlineKeyboardButton("📚 Все разделы", callback_data="academyv2:modules"))
-    markup.add(telebot.types.InlineKeyboardButton("📝 Аттестация", callback_data="learn:home:assessment"))
+    markup.add(telebot.types.InlineKeyboardButton("▶️ Продолжить маршрут", callback_data="academyv2:continue"))
+    markup.add(telebot.types.InlineKeyboardButton("🎭 Тренажёр / практика", callback_data="academyv2:training"))
+    markup.add(telebot.types.InlineKeyboardButton("📚 База знаний", callback_data="academyv2:modules"))
+    if p["completed"] >= p["total"]:
+        markup.add(telebot.types.InlineKeyboardButton("📝 Проверка знаний", callback_data="learn:home:assessment"))
     markup.add(telebot.types.InlineKeyboardButton("📊 Мой прогресс", callback_data="academyv2:progress"))
     if get_role(_db_path(), user_id) == SUPERVISOR or user_id in _admins():
         markup.add(telebot.types.InlineKeyboardButton("👥 Команда", callback_data="team:list"))
@@ -58,14 +56,13 @@ def _send_home(bot, chat_id, remove_keyboard=False):
         _remove_reply_keyboard(bot, chat_id)
     p = progress(_db_path(), chat_id)
     if p["completed"] >= p["total"]:
-        status = "Базовый маршрут завершён. Можно переходить к аттестации и тренировкам."
+        status = "Базовое обучение завершено. Следующие этапы — проверка знаний и практический экзамен в тренажёре."
     else:
         status = f"Пройдено: {p['completed']} из {p['total']} уроков."
     bot.send_message(
         chat_id,
-        "АКАДЕМИЯ АКЕНСО\n\n"
-        + status
-        + "\n\nУчитесь короткими блоками. После любого урока можно остановиться — прогресс сохранится.",
+        "АКАДЕМИЯ АКЕНСО\n\n" + status +
+        "\n\nГлавный путь — «Продолжить маршрут». База знаний, тренажёр и прогресс доступны отдельно.",
         reply_markup=_home_markup(chat_id),
     )
 
@@ -75,12 +72,10 @@ def _modules_markup(user_id):
     markup = telebot.types.InlineKeyboardMarkup(row_width=1)
     for module_id in MODULE_ORDER:
         item = p["modules"][module_id]
-        markup.add(
-            telebot.types.InlineKeyboardButton(
-                f"{item['title']} · {item['completed']}/{item['total']}",
-                callback_data=f"academyv2:module:{module_id}",
-            )
-        )
+        markup.add(telebot.types.InlineKeyboardButton(
+            f"{item['title']} · {item['completed']}/{item['total']}",
+            callback_data=f"academyv2:module:{module_id}",
+        ))
     markup.add(telebot.types.InlineKeyboardButton("← В Академию", callback_data="academyv2:home"))
     return markup
 
@@ -88,7 +83,7 @@ def _modules_markup(user_id):
 def _send_modules(bot, chat_id):
     bot.send_message(
         chat_id,
-        "РАЗДЕЛЫ ОБУЧЕНИЯ\n\nПроходите по порядку или возвращайтесь к нужному разделу.",
+        "БАЗА ЗНАНИЙ\n\nЗдесь можно открыть любой учебный раздел. Для первого прохождения используйте «Продолжить маршрут».",
         reply_markup=_modules_markup(chat_id),
     )
 
@@ -96,33 +91,24 @@ def _send_modules(bot, chat_id):
 def _module_markup(module_id):
     markup = telebot.types.InlineKeyboardMarkup(row_width=1)
     for index, lesson in enumerate(ONBOARDING[module_id]["lessons"]):
-        markup.add(
-            telebot.types.InlineKeyboardButton(
-                f"{index + 1}. {lesson['title']} · {lesson['minutes']} мин",
-                callback_data=f"academyv2:lesson:{module_id}:{index}",
-            )
-        )
-    markup.add(telebot.types.InlineKeyboardButton("← К разделам", callback_data="academyv2:modules"))
+        markup.add(telebot.types.InlineKeyboardButton(
+            f"{index + 1}. {lesson['title']} · {lesson['minutes']} мин",
+            callback_data=f"academyv2:lesson:{module_id}:{index}",
+        ))
+    markup.add(telebot.types.InlineKeyboardButton("← К базе знаний", callback_data="academyv2:modules"))
     return markup
 
 
 def _send_module(bot, chat_id, module_id):
     item = ONBOARDING[module_id]
-    bot.send_message(
-        chat_id,
-        f"{item['title'].upper()}\n\n{item['intro']}",
-        reply_markup=_module_markup(module_id),
-    )
+    bot.send_message(chat_id, f"{item['title'].upper()}\n\n{item['intro']}", reply_markup=_module_markup(module_id))
 
 
 def _lesson_markup(module_id, index):
     markup = telebot.types.InlineKeyboardMarkup(row_width=1)
-    markup.add(
-        telebot.types.InlineKeyboardButton(
-            "✅ Проверить себя",
-            callback_data=f"academyv2:check:{module_id}:{index}",
-        )
-    )
+    markup.add(telebot.types.InlineKeyboardButton(
+        "✅ Проверить себя", callback_data=f"academyv2:check:{module_id}:{index}"
+    ))
     markup.add(telebot.types.InlineKeyboardButton("⏸ Сделать паузу", callback_data="academyv2:pause"))
     markup.add(telebot.types.InlineKeyboardButton("← К урокам раздела", callback_data=f"academyv2:module:{module_id}"))
     return markup
@@ -141,18 +127,12 @@ def _send_lesson(bot, chat_id, module_id, index):
 
 def _check_markup(module_id, index):
     markup = telebot.types.InlineKeyboardMarkup(row_width=1)
-    markup.add(
-        telebot.types.InlineKeyboardButton(
-            "Показать подсказку из урока",
-            callback_data=f"academyv2:lesson:{module_id}:{index}",
-        )
-    )
-    markup.add(
-        telebot.types.InlineKeyboardButton(
-            "✅ Ответил(а) — идти дальше",
-            callback_data=f"academyv2:complete:{module_id}:{index}",
-        )
-    )
+    markup.add(telebot.types.InlineKeyboardButton(
+        "Показать подсказку из урока", callback_data=f"academyv2:lesson:{module_id}:{index}"
+    ))
+    markup.add(telebot.types.InlineKeyboardButton(
+        "✅ Ответил(а) — идти дальше", callback_data=f"academyv2:complete:{module_id}:{index}"
+    ))
     markup.add(telebot.types.InlineKeyboardButton("⏸ Сделать паузу", callback_data="academyv2:pause"))
     return markup
 
@@ -161,9 +141,8 @@ def _send_checkpoint(bot, chat_id, module_id, index):
     lesson = ONBOARDING[module_id]["lessons"][int(index)]
     bot.send_message(
         chat_id,
-        "ПРОВЕРЬТЕ СЕБЯ\n\n"
-        + lesson["checkpoint"]
-        + "\n\nОтветьте себе вслух или одной-двумя фразами. Это не аттестация — здесь важно понять, можете ли вы объяснить материал своими словами.",
+        "ПРОВЕРЬТЕ СЕБЯ\n\n" + lesson["checkpoint"] +
+        "\n\nОтветьте себе вслух или одной-двумя фразами. Это не аттестация: здесь важно суметь объяснить материал своими словами.",
         reply_markup=_check_markup(module_id, index),
     )
 
@@ -175,21 +154,28 @@ def _send_progress(bot, chat_id):
         item = p["modules"][module_id]
         lines.append(f"• {item['title']}: {item['completed']}/{item['total']}")
     markup = telebot.types.InlineKeyboardMarkup(row_width=1)
-    markup.add(telebot.types.InlineKeyboardButton("▶️ Продолжить обучение", callback_data="academyv2:continue"))
+    markup.add(telebot.types.InlineKeyboardButton("▶️ Продолжить маршрут", callback_data="academyv2:continue"))
+    markup.add(telebot.types.InlineKeyboardButton("🎭 Тренажёр / практика", callback_data="academyv2:training"))
     markup.add(telebot.types.InlineKeyboardButton("← В Академию", callback_data="academyv2:home"))
     bot.send_message(chat_id, "\n".join(lines), reply_markup=markup)
+
+
+def _assessment_or_practice_markup():
+    markup = telebot.types.InlineKeyboardMarkup(row_width=1)
+    markup.add(telebot.types.InlineKeyboardButton("📝 Проверка знаний", callback_data="learn:home:assessment"))
+    markup.add(telebot.types.InlineKeyboardButton("🎭 Практический экзамен", callback_data="academyv2:training"))
+    markup.add(telebot.types.InlineKeyboardButton("← В Академию", callback_data="academyv2:home"))
+    return markup
 
 
 def _continue(bot, chat_id):
     target = next_lesson(_db_path(), chat_id)
     if target is None:
-        markup = telebot.types.InlineKeyboardMarkup(row_width=1)
-        markup.add(telebot.types.InlineKeyboardButton("📝 Перейти к аттестации", callback_data="learn:home:assessment"))
-        markup.add(telebot.types.InlineKeyboardButton("← В Академию", callback_data="academyv2:home"))
         bot.send_message(
             chat_id,
-            "Базовое обучение завершено. Все 11 уроков пройдены.",
-            reply_markup=markup,
+            "Базовое обучение завершено. Теперь нужно подтвердить знания и обязательно пройти практический разговор в тренажёре. "
+            "Итоговый допуск формируется только по теории + практике.",
+            reply_markup=_assessment_or_practice_markup(),
         )
         return
     module_id, index, _ = target
@@ -200,22 +186,38 @@ def _complete(bot, chat_id, module_id, index):
     lesson = ONBOARDING[module_id]["lessons"][int(index)]
     mark_completed(_db_path(), chat_id, lesson["id"])
     upcoming = next_after(module_id, int(index))
-    markup = telebot.types.InlineKeyboardMarkup(row_width=1)
     if upcoming is None:
-        markup.add(telebot.types.InlineKeyboardButton("📝 Перейти к аттестации", callback_data="learn:home:assessment"))
-        markup.add(telebot.types.InlineKeyboardButton("📊 Мой прогресс", callback_data="academyv2:progress"))
-        text = "Урок отмечен как пройденный. Базовый маршрут завершён."
-    else:
-        next_module, next_index, next_item = upcoming
-        markup.add(
-            telebot.types.InlineKeyboardButton(
-                f"Дальше: {next_item['title']}",
-                callback_data=f"academyv2:lesson:{next_module}:{next_index}",
-            )
+        bot.send_message(
+            chat_id,
+            "Базовый маршрут завершён. Следующие обязательные этапы: проверка знаний и практический экзамен в тренажёре.",
+            reply_markup=_assessment_or_practice_markup(),
         )
-        markup.add(telebot.types.InlineKeyboardButton("⏸ Сделать паузу", callback_data="academyv2:pause"))
-        text = "Урок отмечен как пройденный. Можно идти дальше или остановиться — прогресс уже сохранён."
-    bot.send_message(chat_id, text, reply_markup=markup)
+        return
+    next_module, next_index, next_item = upcoming
+    markup = telebot.types.InlineKeyboardMarkup(row_width=1)
+    markup.add(telebot.types.InlineKeyboardButton(
+        f"Дальше: {next_item['title']}", callback_data=f"academyv2:lesson:{next_module}:{next_index}"
+    ))
+    markup.add(telebot.types.InlineKeyboardButton("⏸ Сделать паузу", callback_data="academyv2:pause"))
+    bot.send_message(
+        chat_id,
+        "Урок отмечен как пройденный. Можно идти дальше или остановиться — прогресс сохранён.",
+        reply_markup=markup,
+    )
+
+
+def _open_training(bot, chat_id):
+    # Existing trainer remains the single training engine. This transition removes
+    # Academy inline clutter and hands the user to its established reply-keyboard flow.
+    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.row(telebot.types.KeyboardButton("Тренировка"))
+    markup.row(telebot.types.KeyboardButton("К Академии"))
+    bot.send_message(
+        chat_id,
+        "ПРАКТИЧЕСКИЙ ЭКЗАМЕН\n\nНажмите «Тренировка». Проведите полноценный разговор и завершите его до проверенного разбора. "
+        "Именно этот результат имеет основной вес в итоговом допуске.",
+        reply_markup=markup,
+    )
 
 
 def _handle_text(bot, message):
@@ -264,11 +266,13 @@ def _handle_callback(bot, call):
             _continue(bot, chat_id)
         elif action == "progress":
             _send_progress(bot, chat_id)
+        elif action == "training":
+            _open_training(bot, chat_id)
         elif action == "pause":
             p = progress(_db_path(), chat_id)
             bot.send_message(
                 chat_id,
-                f"Пауза сохранена. Пройдено {p['completed']} из {p['total']} уроков. Возвращайтесь через «Продолжить обучение».",
+                f"Пауза сохранена. Пройдено {p['completed']} из {p['total']} уроков.",
                 reply_markup=_home_markup(chat_id),
             )
         else:
@@ -277,7 +281,7 @@ def _handle_callback(bot, call):
         bot.answer_callback_query(call.id)
     except Exception:
         try:
-            bot.answer_callback_query(call.id, "Не удалось открыть урок. Попробуйте ещё раз.", show_alert=True)
+            bot.answer_callback_query(call.id, "Не удалось открыть раздел. Попробуйте ещё раз.", show_alert=True)
         except Exception:
             pass
     return True
