@@ -11,6 +11,7 @@ import telebot
 from academy.access import has_company_access, get_role, SUPERVISOR
 from academy.onboarding import MODULE_ORDER, ONBOARDING
 from academy.onboarding_progress import progress, next_lesson, next_after, mark_completed
+from academy.admission import start_practical_exam
 
 _INSTALLED = False
 _ORIGINAL_MESSAGE_HANDLER = None
@@ -45,6 +46,7 @@ def _home_markup(user_id):
     markup.add(telebot.types.InlineKeyboardButton("📚 База знаний", callback_data="academyv2:modules"))
     if p["completed"] >= p["total"]:
         markup.add(telebot.types.InlineKeyboardButton("📝 Проверка знаний", callback_data="learn:home:assessment"))
+        markup.add(telebot.types.InlineKeyboardButton("🏁 Итог аттестации", callback_data="learn:admission"))
     markup.add(telebot.types.InlineKeyboardButton("📊 Мой прогресс", callback_data="academyv2:progress"))
     if get_role(_db_path(), user_id) == SUPERVISOR or user_id in _admins():
         markup.add(telebot.types.InlineKeyboardButton("👥 Команда", callback_data="team:list"))
@@ -156,6 +158,8 @@ def _send_progress(bot, chat_id):
     markup = telebot.types.InlineKeyboardMarkup(row_width=1)
     markup.add(telebot.types.InlineKeyboardButton("▶️ Продолжить маршрут", callback_data="academyv2:continue"))
     markup.add(telebot.types.InlineKeyboardButton("🎭 Тренажёр / практика", callback_data="academyv2:training"))
+    if p["completed"] >= p["total"]:
+        markup.add(telebot.types.InlineKeyboardButton("🏁 Итог аттестации", callback_data="learn:admission"))
     markup.add(telebot.types.InlineKeyboardButton("← В Академию", callback_data="academyv2:home"))
     bot.send_message(chat_id, "\n".join(lines), reply_markup=markup)
 
@@ -164,6 +168,7 @@ def _assessment_or_practice_markup():
     markup = telebot.types.InlineKeyboardMarkup(row_width=1)
     markup.add(telebot.types.InlineKeyboardButton("📝 Проверка знаний", callback_data="learn:home:assessment"))
     markup.add(telebot.types.InlineKeyboardButton("🎭 Практический экзамен", callback_data="academyv2:training"))
+    markup.add(telebot.types.InlineKeyboardButton("🏁 Итог аттестации", callback_data="learn:admission"))
     markup.add(telebot.types.InlineKeyboardButton("← В Академию", callback_data="academyv2:home"))
     return markup
 
@@ -207,15 +212,16 @@ def _complete(bot, chat_id, module_id, index):
 
 
 def _open_training(bot, chat_id):
-    # Existing trainer remains the single training engine. This transition removes
-    # Academy inline clutter and hands the user to its established reply-keyboard flow.
+    # Mark this point before the existing trainer starts so older training sessions
+    # cannot accidentally count as the practical attestation exam.
+    start_practical_exam(_db_path(), chat_id)
     markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row(telebot.types.KeyboardButton("Тренировка"))
     markup.row(telebot.types.KeyboardButton("К Академии"))
     bot.send_message(
         chat_id,
         "ПРАКТИЧЕСКИЙ ЭКЗАМЕН\n\nНажмите «Тренировка». Проведите полноценный разговор и завершите его до проверенного разбора. "
-        "Именно этот результат имеет основной вес в итоговом допуске.",
+        "Только новая тренировка, начатая после этого шага, попадёт в итоговую аттестацию. Практика имеет основной вес в допуске.",
         reply_markup=markup,
     )
 
@@ -270,11 +276,7 @@ def _handle_callback(bot, call):
             _open_training(bot, chat_id)
         elif action == "pause":
             p = progress(_db_path(), chat_id)
-            bot.send_message(
-                chat_id,
-                f"Пауза сохранена. Пройдено {p['completed']} из {p['total']} уроков.",
-                reply_markup=_home_markup(chat_id),
-            )
+            bot.send_message(chat_id, f"Пауза сохранена. Пройдено {p['completed']} из {p['total']} уроков.", reply_markup=_home_markup(chat_id))
         else:
             bot.answer_callback_query(call.id, "Неизвестная команда.", show_alert=True)
             return True
