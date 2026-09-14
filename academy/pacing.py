@@ -108,11 +108,11 @@ def apply_behavior(session, plan, state):
         state['interest'] = max(0, old['interest'] - 1)
     elif action in ('reflection', 'relevant_argument', 'objection_work'):
         state['trust'] = min(5, old['trust'] + 1)
+    # Information is still earned one fact at a time. Hard mode creates resistance through
+    # its opening, barrier cadence and trust/interest dynamics; a valid discovery question
+    # must remain able to reveal one relevant fact so the conversation cannot deadlock.
     fresh = [i for i in plan['reveal_ids'] if i not in old['revealed']]
     permitted = fresh[:1] if action in ('question', 'reflection', 'objection_work') and plan['intent'] != 'name' else []
-    # Hard mode is intentionally less generous: weak/generic questions do not unlock hidden context.
-    if session['fields']['difficulty'] == 'hard' and action == 'question' and old.get('trust', 0) <= 1:
-        permitted = []
     state['revealed'] = sorted(set(old['revealed']) | set(permitted))
     state['required_objection'] = ''
     state['required_objection_id'] = ''
