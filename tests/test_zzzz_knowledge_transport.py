@@ -79,9 +79,10 @@ class KnowledgeTransportTests(unittest.TestCase):
                 self.callback(f'learn:read:{module_id}')
                 self.assertEqual(self.bot.edit_message_text.call_args.args[0], item['body'])
                 self.callback(f'learn:start:{module_id}')
-                for index, question in enumerate(QUESTION_BANK[module_id]):
-                    self.assertEqual(assessment.question(self.path, 10)['index'], index)
-                    self.callback(f'learn:answer:{module_id}:{index}:{question["correct"]}')
+                for index in range(len(QUESTION_BANK[module_id])):
+                    current = assessment.question(self.path, 10)
+                    self.assertEqual(current['index'], index)
+                    self.callback(f'learn:answer:{module_id}:{index}:{current["correct"]}')
                 self.assertIsNone(assessment.question(self.path, 10))
                 self.assertIn('100%', self.bot.edit_message_text.call_args.args[0])
         result = admission.assess(self.path, 10)
@@ -94,10 +95,20 @@ class KnowledgeTransportTests(unittest.TestCase):
         self.callback('team:user:10', user_id=999)
         self.assertIn('Практический экзамен', self.bot.edit_message_text.call_args.args[0])
 
+    def test_answer_positions_are_not_fixed_to_first_option(self):
+        self.callback('learn:start:product')
+        positions = []
+        for index in range(min(4, len(QUESTION_BANK['product']))):
+            current = assessment.question(self.path, 10)
+            positions.append(current['correct'])
+            self.callback(f'learn:answer:product:{index}:{current["correct"]}')
+        self.assertGreater(len(set(positions)), 1)
+
     def test_stale_answer_cannot_consume_the_next_question(self):
         self.callback('learn:start:product')
-        self.callback('learn:answer:product:0:0')
-        self.callback('learn:answer:product:0:0')
+        first = assessment.question(self.path, 10)
+        self.callback(f'learn:answer:product:0:{first["correct"]}')
+        self.callback(f'learn:answer:product:0:{first["correct"]}')
         self.assertEqual(assessment.question(self.path, 10)['index'], 1)
         self.assertTrue(self.bot.answer_callback_query.call_args.kwargs.get('show_alert'))
 
