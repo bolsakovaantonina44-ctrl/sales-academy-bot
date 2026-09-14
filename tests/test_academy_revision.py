@@ -3,9 +3,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from academy import admission
-from academy.attestation_bank import QUESTION_BANK
+from academy import admission, assessment
 from academy.learning import record_assessment
+from academy.onboarding import ONBOARDING
 from academy.onboarding_progress import ordered_lessons
 
 
@@ -28,16 +28,42 @@ class AcademyRevisionTests(unittest.TestCase):
         self.assertEqual([m for m, _, _ in lessons[6:12]], ["sales"] * 6)
         self.assertEqual([m for m, _, _ in lessons[12:]], ["regulations"] * 2)
 
-    def test_attestation_keeps_calibre_and_tone_but_removes_forbidden_brands(self):
-        text = repr(QUESTION_BANK).lower()
+    def test_current_product_knowledge_matches_manager_revision(self):
+        text = repr(ONBOARDING["product"]).lower()
+        self.assertIn("600×600", text)
+        self.assertIn("600×1200", text)
+        self.assertIn("300×600", text)
+        self.assertIn("белое солнце", text)
+        self.assertIn("соль-перец", text)
+        self.assertIn("самарский стройфарфор", text)
+        self.assertIn("35 дней", text)
+        self.assertIn("128,16", text)
+        self.assertNotIn("equipe", text)
+        self.assertNotIn("italon", text)
+
+    def test_sales_teaches_open_and_closed_questions(self):
+        text = repr(ONBOARDING["sales"]).lower()
+        self.assertIn("открытые", text)
+        self.assertIn("закрытые", text)
+        self.assertIn("кто согласует", text)
+        self.assertIn("бюджет", text)
+        self.assertIn("следующий шаг", text)
+
+    def test_attestation_keeps_calibre_tone_and_adds_real_calculation(self):
+        text = repr(assessment.QUESTION_BANK).lower()
         self.assertIn("калибр", text)
         self.assertIn("тон", text)
+        self.assertIn("356", text)
+        self.assertIn("128,16", text)
+        self.assertIn("самарском стройфарфоре", text)
+        self.assertIn("открытых и закрытых", text)
         self.assertNotIn("italon", text)
         self.assertNotIn("arlequino", text)
         self.assertNotIn("aqueastrelle", text)
-        self.assertGreaterEqual(len(QUESTION_BANK["product"]), 8)
-        self.assertGreaterEqual(len(QUESTION_BANK["sales"]), 8)
-        self.assertGreaterEqual(len(QUESTION_BANK["regulations"]), 5)
+        self.assertNotIn("equipe", text)
+        self.assertGreaterEqual(len(assessment.QUESTION_BANK["product"]), 12)
+        self.assertGreaterEqual(len(assessment.QUESTION_BANK["sales"]), 10)
+        self.assertGreaterEqual(len(assessment.QUESTION_BANK["regulations"]), 5)
 
     def test_theory_alone_never_grants_admission(self):
         self._record_scores((100, 100, 100))
