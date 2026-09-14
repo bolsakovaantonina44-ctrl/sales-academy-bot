@@ -5,6 +5,7 @@ trainer controls and uses inline buttons so stale training reply keyboards disap
 """
 import os
 import functools
+from types import SimpleNamespace
 
 import telebot
 
@@ -16,6 +17,7 @@ from academy import admission, assessment
 _INSTALLED = False
 _ORIGINAL_MESSAGE_HANDLER = None
 _ORIGINAL_CALLBACK_HANDLER = None
+_BOT_ON_TEXT_HANDLER = None
 
 
 def _db_path():
@@ -183,8 +185,7 @@ def _continue(bot, chat_id):
     if target is None:
         bot.send_message(
             chat_id,
-            "Базовое обучение завершено. Порядок допуска: проверка знаний → практический экзамен → итоговый вердикт. "
-            "Практика имеет основной вес.",
+            "Базовое обучение завершено. Порядок допуска: проверка знаний → практический экзамен → итоговый вердикт. Практика имеет основной вес.",
             reply_markup=_assessment_or_practice_markup(),
         )
         return
@@ -210,13 +211,6 @@ def _complete(bot, chat_id, module_id, index):
     bot.send_message(chat_id, "Урок отмечен как пройденный. Можно идти дальше или остановиться — прогресс сохранён.", reply_markup=markup)
 
 
-def _trainer_keyboard():
-    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row(telebot.types.KeyboardButton("Тренировка"))
-    markup.row(telebot.types.KeyboardButton("К Академии"))
-    return markup
-
-
 def _open_training(bot, chat_id, exam=False):
     if exam:
         if not _knowledge_complete(chat_id):
@@ -226,15 +220,19 @@ def _open_training(bot, chat_id, exam=False):
             bot.send_message(chat_id, "Сначала завершите все три проверки знаний. После этого откроется практический экзамен, который формирует основной вес допуска.", reply_markup=markup)
             return
         admission.start_practical_exam(_db_path(), chat_id)
-        text = (
-            "ПРАКТИЧЕСКИЙ ЭКЗАМЕН\n\nНажмите «Тренировка». Проведите полноценный разговор и завершите его до проверенного разбора. "
-            "Только новая тренировка после этого запуска попадёт в итоговый допуск."
-        )
+        bot.send_message(chat_id, "ПРАКТИЧЕСКИЙ ЭКЗАМЕН\n\nСейчас откроется тренажёр. Проведите полноценный разговор и завершите его до проверенного разбора. Только эта новая сессия попадёт в итоговый допуск.")
     else:
-        text = (
-            "ТРЕНАЖЁР\n\nЭто обычная практика и она не заменяет итоговый экзамен. Нажмите «Тренировка», выберите навык и проведите разговор."
-        )
-    bot.send_message(chat_id, text, reply_markup=_trainer_keyboard())
+        bot.send_message(chat_id, "ТРЕНАЖЁР\n\nОткрываю обычную практику. Она помогает тренироваться, но не заменяет итоговый практический экзамен.")
+
+    if _BOT_ON_TEXT_HANDLER is None:
+        # Safe fallback if the transport has not finished registering handlers yet.
+        markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+        markup.row(telebot.types.KeyboardButton("Тренировка"))
+        markup.row(telebot.types.KeyboardButton("К Академии"))
+        bot.send_message(chat_id, "Нажмите «Тренировка».", reply_markup=markup)
+        return
+    fake = SimpleNamespace(chat=SimpleNamespace(id=chat_id), text="Тренировка")
+    _BOT_ON_TEXT_HANDLER(fake)
 
 
 def _post_learning_answer(bot, call):
@@ -242,8 +240,6 @@ def _post_learning_answer(bot, call):
     if not data.startswith("learn:answer:"):
         return
     chat_id = call.message.chat.id
-    # Only react after a module attempt has finished. During an active question,
-    # assessment.question() remains non-null.
     if assessment.question(_db_path(), chat_id) is not None:
         return
     result = admission.assess(_db_path(), chat_id)
@@ -315,8 +311,10 @@ def install():
     def patched_message_handler(self, *args, **kwargs):
         original_decorator = _ORIGINAL_MESSAGE_HANDLER(self, *args, **kwargs)
         def decorator(handler):
+            global _BOT_ON_TEXT_HANDLER
             if handler.__name__ != "on_text":
                 return original_decorator(handler)
+            _BOT_ON_TEXT_HANDLER = handler
             @functools.wraps(handler)
             def wrapped(message):
                 if _handle_text(self, message): return None
