@@ -14,12 +14,12 @@ def _db():
     return Path(tempfile.mkdtemp()) / "academy.sqlite3"
 
 
-def test_onboarding_has_eleven_lessons_in_required_order():
+def test_onboarding_has_fourteen_lessons_in_required_order():
     lessons = ordered_lessons()
-    assert len(lessons) == 11
-    assert [module_id for module_id, _, _ in lessons[:4]] == ["product"] * 4
-    assert [module_id for module_id, _, _ in lessons[4:9]] == ["sales"] * 5
-    assert [module_id for module_id, _, _ in lessons[9:]] == ["regulations"] * 2
+    assert len(lessons) == 14
+    assert [module_id for module_id, _, _ in lessons[:6]] == ["product"] * 6
+    assert [module_id for module_id, _, _ in lessons[6:12]] == ["sales"] * 6
+    assert [module_id for module_id, _, _ in lessons[12:]] == ["regulations"] * 2
 
 
 def test_progress_starts_empty_and_resumes_first_unfinished_lesson():
@@ -27,7 +27,7 @@ def test_progress_starts_empty_and_resumes_first_unfinished_lesson():
     user_id = 101
     snapshot = progress(path, user_id)
     assert snapshot["completed"] == 0
-    assert snapshot["total"] == 11
+    assert snapshot["total"] == 14
 
     module_id, index, lesson = next_lesson(path, user_id)
     assert (module_id, index, lesson["id"]) == ("product", 0, "product-1")
@@ -45,10 +45,10 @@ def test_progress_is_isolated_between_employees():
 
 
 def test_next_after_crosses_module_boundaries():
-    module_id, index, lesson = next_after("product", 3)
+    module_id, index, lesson = next_after("product", 5)
     assert (module_id, index, lesson["id"]) == ("sales", 0, "sales-1")
 
-    module_id, index, lesson = next_after("sales", 4)
+    module_id, index, lesson = next_after("sales", 5)
     assert (module_id, index, lesson["id"]) == ("regulations", 0, "regulations-1")
 
     assert next_after("regulations", 1) is None
