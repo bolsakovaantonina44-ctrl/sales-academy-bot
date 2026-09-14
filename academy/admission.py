@@ -2,6 +2,7 @@
 from .learning import MODULES, progress_snapshot
 
 MIN_ADMISSION_SCORE = 7.0
+COMPANY_CHAT_URL = "https://t.me/+F-D9K-WkUEwxNjli"
 
 PRACTICE_CASES = {
     "first_contact": "Первый контакт: кратко назвать причину обращения и задать вопрос об объекте или текущей задаче.",
@@ -106,6 +107,12 @@ def employee_text(result):
     if result["practice_cases"]:
         lines += ["", "Обязательные тренировки:"]
         lines += [f"• {PRACTICE_CASES[item]}" for item in result["practice_cases"]]
+    if result["complete"] and result.get("grade") is not None and result["grade"] >= MIN_ADMISSION_SCORE:
+        lines += [
+            "",
+            "Аттестация завершена. Присоединяйтесь к рабочему чату компании:",
+            COMPANY_CHAT_URL,
+        ]
     return "\n".join(lines)
 
 
