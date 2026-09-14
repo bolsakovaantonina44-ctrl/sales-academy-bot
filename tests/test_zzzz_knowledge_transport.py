@@ -26,7 +26,6 @@ class KnowledgeTransportTests(unittest.TestCase):
             'OPENAI_API_KEY': 'test-not-a-real-key',
             'TELEGRAM_TOKEN': '12345:test-not-a-real-token',
         }, clear=True))
-        # Use the exact production entry point, including its transport wrappers.
         import telemetry_launcher
         import bot
         self.app = bot
@@ -67,13 +66,12 @@ class KnowledgeTransportTests(unittest.TestCase):
     def test_polling_replaces_a_previous_messages_only_filter(self):
         options = self.bot.infinity_polling.call_args.kwargs
         self.assertEqual(options.get('allowed_updates'), ['message', 'callback_query'])
-        # Verify that the pinned Telegram library sends the filter over its API.
         with patch.object(telebot.apihelper, '_make_request', return_value=[]) as request:
             self.bot.get_updates(allowed_updates=options['allowed_updates'])
         params = request.call_args.kwargs['params']
         self.assertEqual(json.loads(params['allowed_updates']), ['message', 'callback_query'])
 
-    def test_every_module_opens_and_all_three_tests_reach_admission(self):
+    def test_every_module_opens_and_theory_requires_practical_exam(self):
         self.message('База знаний')
         self.assertIn('АКАДЕМИЯ АКЕНСО', self.bot.send_message.call_args.args[1])
         for module_id, item in MODULE_CONTENT.items():
@@ -87,12 +85,14 @@ class KnowledgeTransportTests(unittest.TestCase):
                 self.assertIsNone(assessment.question(self.path, 10))
                 self.assertIn('100%', self.bot.edit_message_text.call_args.args[0])
         result = admission.assess(self.path, 10)
-        self.assertTrue(result['complete'])
-        self.assertEqual(result['grade'], 10)
+        self.assertFalse(result['complete'])
+        self.assertFalse(result['passed'])
+        self.assertEqual(result['theory_score'], 100.0)
+        self.assertIn('Практический экзамен', result['missing'][0])
         self.callback('learn:admission')
-        self.assertIn('10.0', self.bot.edit_message_text.call_args.args[0])
+        self.assertIn('Практический экзамен', self.bot.edit_message_text.call_args.args[0])
         self.callback('team:user:10', user_id=999)
-        self.assertIn('10.0', self.bot.edit_message_text.call_args.args[0])
+        self.assertIn('Практический экзамен', self.bot.edit_message_text.call_args.args[0])
 
     def test_stale_answer_cannot_consume_the_next_question(self):
         self.callback('learn:start:product')
