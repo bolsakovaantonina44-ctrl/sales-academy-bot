@@ -13,6 +13,7 @@ from academy.store import Store
 from academy.domain import normalize_command, upgrade_session, chunks, is_finish_command
 from academy.diagnostics import log_failure
 from academy.pacing import FOCUS_OBJECTIONS
+from academy.reporting import total_score
 from academy.access import PUBLIC, AKENSO, SUPERVISOR, get_role, set_role, has_company_access, ensure_access_schema
 from academy.curriculum import MODULE_CONTENT
 from academy.learning import progress_snapshot
@@ -176,6 +177,57 @@ def deliver_pdf(bot, store, chat_id, text, admins=()):
     bot.send_document(chat_id, fileobj, visible_file_name=f'{title}_{session_id}.pdf')
 
 
+def queue_training_reports(store, user_id, session, admin_ids):
+    """Durably queue one supervisor notice and PDF per completed corporate training."""
+    if get_role(store.path, user_id) not in {AKENSO, SUPERVISOR}:
+        return 0
+    if session.get('phase') != 'completed' or not session.get('report_data') or not session.get('id'):
+        return 0
+
+    employee = session.get('employee', {})
+    employee_name = ' '.join(str(employee.get('name') or '').split()) or f'Telegram ID {user_id}'
+    score = total_score(session.get('report_data'))
+    result = f'{score}/100' if score is not None else 'оценка требует проверки'
+    fields = session.get('fields', {})
+    notice = (
+        'НОВАЯ ТРЕНИРОВКА СОТРУДНИКА\n\n'
+        f'Сотрудник: {employee_name}\n'
+        f'Тренировка №{session["id"]}\n'
+        f'Клиент: {fields.get("customer") or "не указан"}\n'
+        f'Цель: {fields.get("goal") or "не указана"}\n'
+        f'Результат: {result}\n\n'
+        'Руководительский PDF-отчёт отправлен следующим сообщением.'
+    )
+
+    queued = 0
+    with store.db() as db:
+        db.execute(
+            'CREATE TABLE IF NOT EXISTS notifications('
+            'user_id INTEGER NOT NULL, key TEXT NOT NULL, '
+            'PRIMARY KEY(user_id,key))'
+        )
+        for admin_id in {int(value) for value in admin_ids}:
+            if admin_id == int(user_id):
+                continue
+            key = f'training_report_v1:{session["id"]}'
+            inserted = db.execute(
+                'INSERT OR IGNORE INTO notifications(user_id,key) VALUES(?,?)',
+                (admin_id, key),
+            ).rowcount
+            if not inserted:
+                continue
+            db.execute(
+                'INSERT INTO outbox(user_id,chat_id,body) VALUES(?,?,?)',
+                (admin_id, admin_id, notice),
+            )
+            db.execute(
+                'INSERT INTO outbox(user_id,chat_id,body) VALUES(?,?,?)',
+                (admin_id, admin_id, f'__academy_pdf__:{session["id"]}:supervisor'),
+            )
+            queued += 1
+    return queued
+
+
 def _handle_lpr_gate(store, event):
     """One or two realistic discovery steps before the target LPR; never loop indefinitely."""
     if event.get('kind') != 'text':
@@ -235,6 +287,7 @@ def worker(store, engine, ai, bot, stop, send):
             store.defer(event)
             continue
         try:
+            previous_phase = store.current(event['user_id']).get('phase')
             if event['kind'] == 'text' and normalize_command(event['text']) in ('/retry', 'повторить обработку'):
                 failed = store.failed(event['user_id'])
                 if failed and failed['attempts'] < 2:
@@ -260,6 +313,9 @@ def worker(store, engine, ai, bot, stop, send):
                 stage = 'conversation'
             if not _handle_lpr_gate(store, event):
                 engine.handle(event)
+            completed = store.current(event['user_id'])
+            if previous_phase != 'completed' and completed.get('phase') == 'completed':
+                queue_training_reports(store, event['user_id'], completed, engine.admin_ids)
         except Exception as exc:
             log_failure(event, store.current(event['user_id']), locals().get('stage', 'transport'), exc)
             store.fail(event, type(exc).__name__)
@@ -953,9 +1009,27 @@ def main():
             if action == 'set':
                 user_id = int(parts[2])
                 role = parts[3]
+                previous_role = get_role(path, user_id)
                 set_role(path, user_id, role)
                 send_access_user_card(chat_id, user_id, call.message.message_id)
                 bot.answer_callback_query(call.id, f'Роль: {ROLE_LABELS[role]}')
+                if role in {AKENSO, SUPERVISOR} and role != previous_role:
+                    access_label = ('корпоративный доступ АКЕНСО' if role == AKENSO
+                                    else 'доступ руководителя АКЕНСО')
+                    notification = (
+                        f'Вам подключён {access_label}.\n\n'
+                        'Вы можете продолжать тренировки без ограничения. '
+                        'Предыдущая история и разборы сохранены.\n\n'
+                        'Нажмите «Новая тренировка» или «К Академии».'
+                    )
+                    try:
+                        bot.send_message(
+                            user_id,
+                            notification,
+                            reply_markup=_reply_markup(context_rows(user_id)),
+                        )
+                    except Exception:
+                        LOG.exception('Could not deliver access notification user=%s role=%s', user_id, role)
                 return
             bot.answer_callback_query(call.id, 'Неизвестная команда.')
         except Exception:
