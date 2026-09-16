@@ -132,6 +132,22 @@ class KnowledgeTransportTests(unittest.TestCase):
         for call in self.bot.send_message.call_args_list:
             self.assertNotIn(MODULE_CONTENT['product']['body'], call.args[1])
 
+    def test_granting_company_access_notifies_employee_once(self):
+        self.bot.send_message.reset_mock()
+        self.callback('acc:set:20:akenso', user_id=999)
+        employee_messages = [
+            call.args[1] for call in self.bot.send_message.call_args_list
+            if call.args and call.args[0] == 20
+        ]
+        self.assertEqual(len(employee_messages), 1)
+        self.assertIn('корпоративный доступ АКЕНСО', employee_messages[0])
+        self.assertIn('без ограничения', employee_messages[0])
+        self.assertIn('история и разборы сохранены', employee_messages[0])
+
+        self.bot.send_message.reset_mock()
+        self.callback('acc:set:20:akenso', user_id=999)
+        self.assertFalse(any(call.args and call.args[0] == 20 for call in self.bot.send_message.call_args_list))
+
     def test_module_text_route_offers_working_test_and_back_buttons(self):
         self.message('Продукт')
         call = self.bot.send_message.call_args
