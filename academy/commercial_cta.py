@@ -2,6 +2,7 @@
 import json
 import os
 
+from .access import AKENSO, SUPERVISOR, ensure_access_schema
 from .store import Store
 
 CTA_KEY = 'commercial_cta_v1'
@@ -53,15 +54,23 @@ def _completed_count(rows):
 def _queue_existing_completed_users(store):
     limit = int(os.getenv('FREE_TRAININGS', '3'))
     admins = _admin_ids()
+    ensure_access_schema(store.path)
     with store.db() as db:
         db.execute(
             'CREATE TABLE IF NOT EXISTS notifications('
             'user_id INTEGER NOT NULL, key TEXT NOT NULL, '
             'PRIMARY KEY(user_id,key))'
         )
+        corporate_users = {
+            row[0]
+            for row in db.execute(
+                'SELECT user_id FROM user_access WHERE role IN (?,?)',
+                (AKENSO, SUPERVISOR),
+            )
+        }
         users = [row[0] for row in db.execute('SELECT DISTINCT user_id FROM sessions')]
         for user_id in users:
-            if user_id in admins:
+            if user_id in admins or user_id in corporate_users:
                 continue
             rows = db.execute(
                 'SELECT counted,payload FROM sessions WHERE user_id=? ORDER BY id',
