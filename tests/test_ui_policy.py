@@ -51,7 +51,8 @@ def test_training_context_only_shows_current_training_actions():
 
 def test_supervisor_management_is_separate_from_technical_admin():
     supervisor = flatten(rows_for_context(SUPERVISOR, CONTEXT_MANAGEMENT, is_admin=False))
-    assert supervisor == ['Прогресс команды', 'Сессии сотрудников', 'К Академии']
+    assert supervisor == ['Прогресс команды', 'К Академии']
+    assert 'Сессии сотрудников' not in supervisor
     technical = flatten(rows_for_context(SUPERVISOR, CONTEXT_MANAGEMENT, is_admin=True))
     assert 'Управление доступом' in technical
     assert 'Технические сессии' in technical

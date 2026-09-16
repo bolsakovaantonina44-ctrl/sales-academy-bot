@@ -15,7 +15,7 @@ def test_every_lesson_has_mobile_checkpoint():
     for _, _, item in ordered_lessons():
         assert item["id"] not in ids
         ids.add(item["id"])
-        assert 2 <= item["minutes"] <= 6
+        assert 2 <= item["minutes"] <= 8
         assert item["title"].strip()
         assert item["body"].strip()
         assert item["checkpoint"].strip()

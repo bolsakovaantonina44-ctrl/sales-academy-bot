@@ -8,6 +8,7 @@ from .diagnostics import log_failure
 from .scenarios import TEMPLATES, template, menu
 from .pacing import prepare_card, FOCUS_OBJECTIONS
 from .reporting import fallback_data, total_score
+from .access import PUBLIC, AKENSO, SUPERVISOR, get_role
 
 QUESTIONS = {'product': 'Что ты продаёшь?', 'customer': 'Кому продаёшь: роль клиента и тип компании?',
              'goal': 'Какого результата хочешь достичь в этом разговоре?'}
@@ -40,9 +41,22 @@ def _display_customer(value):
 
 
 class Engine:
-    def __init__(self, store, ai, limit=3, admin_ids=(), max_turns=18):
+    def __init__(self, store, ai, limit=3, admin_ids=(), max_turns=18, role_lookup=None):
         self.store, self.ai, self.limit = store, ai, limit
         self.admin_ids, self.max_turns = set(admin_ids), max_turns
+        self.role_lookup = role_lookup
+
+    def access_role(self, user):
+        if self.role_lookup is not None:
+            return self.role_lookup(user)
+        path = getattr(self.store, 'path', None)
+        return get_role(path, user) if path else PUBLIC
+
+    def has_unlimited_training(self, user):
+        return user in self.admin_ids or self.access_role(user) in {AKENSO, SUPERVISOR}
+
+    def setup_menu(self, user):
+        return menu(public_access=not self.has_unlimited_training(user))
 
     def make_report(self, s, event):
         s.pop('comparison', None)
@@ -84,7 +98,11 @@ class Engine:
         difficulty = {'easy': '1', 'medium': '2', 'hard': '3'}[f['difficulty']]
         focus = s.get('training_focus')
         focus_label = FOCUS_OBJECTIONS.get(focus, {}).get('label', 'не выбрано')
-        base = (f"Продукт: {f['product']}\nКлиент: {f['customer']}\nЦель: {f['goal']}\n"
+        base = ('СЦЕНАРИЙ ПОДГОТОВЛЕН\n\n'
+                'Ваша роль: менеджер по продажам\n'
+                f"Собеседник: {f['customer']}\n"
+                f"Вы предлагаете: {f['product']}\n"
+                f"Цель разговора: {f['goal']}\n"
                 f"Что тренируем: {focus_label}\nСложность: {difficulty}\n\n"
                 'Обычно тренировка занимает до 10 минут.\n')
         if not focus:
@@ -96,6 +114,8 @@ class Engine:
         recent = [x for x in self.store.recent(user) if x['card']]
         if user in self.admin_ids:
             usage = 'Тестовый лимит: для администратора не применяется.'
+        elif self.access_role(user) in {AKENSO, SUPERVISOR}:
+            usage = 'Корпоративный доступ: тренировки без лимита.'
         else:
             used = min(attempts, self.limit)
             remaining = max(0, self.limit - attempts)
@@ -136,7 +156,7 @@ class Engine:
             return 'Имя сохранено. Оно будет указано в отчётах по этой и следующим тренировкам.'
         return ('Спасибо, имя сохранено.\n\nПривет! Это Академия продаж. Клиент не подсказывает во время разговора; '
                 'разбор — после завершения. Можно писать или отправлять голосовые до 3 минут. '
-                'Обычно тренировка занимает до 10 минут.\n\n' + menu())
+                'Обычно тренировка занимает до 10 минут.\n\n' + self.setup_menu(s['employee']['id']))
 
     def handle(self, event):
         user = event['user_id']
@@ -181,7 +201,7 @@ class Engine:
             saved_employee = copy.deepcopy(s.get('employee', {'id': user, 'name': ''}))
             s = session_empty()
             s['employee'] = saved_employee
-            replies = [menu()]
+            replies = [self.setup_menu(user)]
         elif cmd in ('/history', 'мои тренировки'):
             replies = [self.history_summary(user)]
         elif cmd in ('/pdf', 'сформировать отчет', 'скачать результат', 'отчет сотруднику', 'отчет руководителю'):
@@ -239,7 +259,8 @@ class Engine:
                 replies = ['Разговор закончен. Нажми «Завершить тренировку», чтобы получить разбор.']
             else:
                 replies = ['Привет! Это Академия продаж. Клиент не подсказывает во время разговора; разбор — после завершения. '
-                           'Можно писать или отправлять голосовые до 3 минут. Обычно тренировка занимает до 10 минут.\n\n' + menu()]
+                           'Можно писать или отправлять голосовые до 3 минут. Обычно тренировка занимает до 10 минут.\n\n'
+                           + self.setup_menu(user)]
         elif is_finish_command(text):
             self.omit_failed(s, event, failed)
             if s['phase'] == 'completed' and s['report']:
@@ -257,7 +278,7 @@ class Engine:
                 if user in self.admin_ids:
                     replies.append(f"__academy_pdf__:{s['id']}:supervisor")
                 replies.append('Разбор сохранён. PDF-файл отправлен автоматически. Доступны «Посмотреть разбор», «Скачать результат» и «Новая тренировка».')
-                if user not in self.admin_ids and self.store.attempts(user) >= self.limit:
+                if not self.has_unlimited_training(user) and self.store.attempts(user) >= self.limit:
                     replies.append(f'Вы завершили доступные {self.limit} тренировки.\n\n' + s['knowledge']['offer'])
         elif s['phase'] == 'completed':
             replies = ['Эта тренировка завершена. Нажми «Новая тренировка» или «Посмотреть разбор».']
@@ -289,7 +310,7 @@ class Engine:
         elif s['phase'] == 'ready' and cmd in ('начать тренировку', '/begin'):
             if not s.get('training_focus'):
                 replies = ['Сначала выберите, какое возражение тренируем.']
-            elif user not in self.admin_ids and self.store.attempts(user) >= self.limit:
+            elif not self.has_unlimited_training(user) and self.store.attempts(user) >= self.limit:
                 replies = [f'Использованы все {self.limit} бесплатные тренировки. Сохранённые разборы доступны в «Мои тренировки».\n\n' + s['knowledge']['offer']]
             else:
                 s['card'] = s['card'] or self.ai.card({**s['fields'], 'situation': s['setup'],

@@ -57,6 +57,12 @@ class HistorySummaryTests(unittest.TestCase):
         self.assertIn('для администратора не применяется', text)
         self.assertNotIn('осталось 1', text)
 
+    def test_company_user_does_not_get_misleading_free_limit(self):
+        engine = Engine(FakeStore(), ai=object(), limit=3, role_lookup=lambda _: 'akenso')
+        text = engine.history_summary(10)
+        self.assertIn('Корпоративный доступ: тренировки без лимита.', text)
+        self.assertNotIn('осталось 1', text)
+
     def test_garbage_customer_is_not_echoed_in_history(self):
         engine = Engine(FakeStore(), ai=object(), limit=3)
         text = engine.history_summary(10)

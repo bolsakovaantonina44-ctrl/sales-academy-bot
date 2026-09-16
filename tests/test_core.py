@@ -5,6 +5,7 @@ from academy.domain import chunks, validate_card, reduce_plan, initial_state, ch
 from academy.scenarios import template
 from academy.store import Store
 from academy.engine import Engine, deliver
+from academy.access import AKENSO, SUPERVISOR, set_role
 
 
 def plan(**changes):
@@ -91,6 +92,19 @@ class CoreTests(unittest.TestCase):
         self.send('Я продаю плитку'); self.send('Закупщику'); ready=self.send('Получить спецификацию')
         self.assertEqual(ready['phase'],'ready'); self.assertEqual(self.ai.extractions,1)
         self.assertEqual(ready['fields']['customer'],'Закупщику')
+    def test_ready_summary_explains_visible_roles_without_hidden_client_facts(self):
+        self.send('/new');deliver(self.store,10,lambda c,t:None)
+        ready=self.send('1')
+        text='\n'.join(item['body'] for item in self.store.outgoing(10))
+        self.assertEqual(ready['phase'],'ready')
+        self.assertIn('СЦЕНАРИЙ ПОДГОТОВЛЕН',text)
+        self.assertIn('Ваша роль: менеджер по продажам',text)
+        self.assertIn('Собеседник:',text)
+        self.assertIn('Вы предлагаете:',text)
+        self.assertIn('Цель разговора:',text)
+        self.assertNotIn('СКРЫТЫЙ УЧЕБНЫЙ СЦЕНАРИЙ',text)
+        self.assertNotIn('Скрытый мотив:',text)
+        self.assertNotIn('Барьеры:',text)
     def test_closed_client_cannot_reopen(self):
         self.start(); self.ai.close=True; s=self.send('Вопрос')
         self.assertEqual(s['phase'],'closed'); self.send('А всё-таки?'); self.assertEqual(self.ai.calls,1)
@@ -100,6 +114,30 @@ class CoreTests(unittest.TestCase):
         for _ in range(3):self.send('/new'); self.start(); self.send('Вопрос')
         self.send('/new'); self.start()
         self.assertEqual(self.store.current(10)['phase'],'ready'); self.assertEqual(self.store.attempts(10),3)
+    def test_akenso_employee_can_start_more_than_three_trainings(self):
+        set_role(self.path,10,AKENSO)
+        for _ in range(4):
+            self.send('/new');self.start();self.send('Вопрос')
+        self.assertEqual(self.store.current(10)['phase'],'active')
+        self.assertEqual(self.store.attempts(10),4)
+    def test_supervisor_can_start_more_than_three_trainings(self):
+        set_role(self.path,20,SUPERVISOR)
+        for _ in range(4):
+            self.send('/new',20);self.start(20);self.send('Вопрос',20)
+        self.assertEqual(self.store.current(20)['phase'],'active')
+        self.assertEqual(self.store.attempts(20),4)
+    def test_public_promotion_keeps_history_and_removes_limit(self):
+        for _ in range(3):
+            self.send('/new');self.start();self.send('Вопрос')
+        old_ids={item['id'] for item in self.store.recent(10)}
+        self.send('/new');blocked=self.start()
+        self.assertEqual(blocked['phase'],'ready')
+        set_role(self.path,10,AKENSO)
+        active=self.send('Начать тренировку')
+        self.assertEqual(active['phase'],'active')
+        self.send('Вопрос после перевода')
+        self.assertEqual(self.store.attempts(10),4)
+        self.assertTrue(old_ids.issubset({item['id'] for item in self.store.recent(10)}))
     def test_owner_exemption(self):
         self.engine=Engine(self.store,self.ai,limit=0,admin_ids=[10]); self.assertEqual(self.start()['phase'],'active')
     def test_failure_rolls_back_history_and_charge(self):
