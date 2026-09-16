@@ -26,7 +26,7 @@ def session(focus='price', difficulty='hard'):
 
 class BehaviorGuardTests(unittest.TestCase):
     def test_contextual_objections_wait_until_offer_exists(self):
-        for focus in ('price', 'no_need', 'supplier', 'send_info'):
+        for focus in ('no_need', 'supplier', 'send_info'):
             s = session(focus, 'hard')
             first = plan(intent='role', action='question')
             state = apply_behavior(s, first, reduce_plan(s['state'], first, s['card']))
@@ -36,6 +36,33 @@ class BehaviorGuardTests(unittest.TestCase):
             offer = plan(intent='other', action='monologue')
             state = apply_behavior(s, offer, reduce_plan(s['state'], offer, s['card']))
             self.assertEqual(state['required_objection'], FOCUS_OBJECTIONS[focus]['text'], focus)
+
+    def test_price_objection_requires_actual_price_context(self):
+        s = session('price', 'hard')
+        intro = plan(intent='other', action='monologue')
+        s['_current_manager_text'] = 'Мы поставляем отделочные материалы напрямую с заводов.'
+        state = apply_behavior(s, intro, reduce_plan(s['state'], intro, s['card']))
+        self.assertEqual(state['required_objection'], '')
+
+        s['state'] = state
+        offer = plan(intent='other', action='monologue')
+        s['_current_manager_text'] = 'По цене подготовим коммерческое предложение.'
+        state = apply_behavior(s, offer, reduce_plan(s['state'], offer, s['card']))
+        self.assertEqual(state['required_objection'], FOCUS_OBJECTIONS['price']['text'])
+
+    def test_contact_barrier_requires_actual_contact_request(self):
+        s = session('no_need', 'hard')
+        s['card']['barriers'][0].update(id='contact_refusal', text='Личный номер я не передаю.')
+        intro = plan(intent='other', action='monologue')
+        s['_current_manager_text'] = 'Мы поставляем отделочные материалы.'
+        state = apply_behavior(s, intro, reduce_plan(s['state'], intro, s['card']))
+        self.assertEqual(state['required_objection'], '')
+
+        s['state'] = state
+        request = plan(intent='other', action='question')
+        s['_current_manager_text'] = 'Оставьте, пожалуйста, ваш номер телефона.'
+        state = apply_behavior(s, request, reduce_plan(s['state'], request, s['card']))
+        self.assertEqual(state['required_objection'], 'Личный номер я не передаю.')
 
     def test_no_time_can_be_immediate(self):
         s = session('no_time', 'hard')

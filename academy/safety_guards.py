@@ -1,6 +1,8 @@
 """Deterministic guards for client replies that must never rely on model compliance alone."""
 import re
 
+from .pacing import manager_history, price_context_exists
+
 _NUMBER_RE = re.compile(r"(?<!\w)\d+(?:[.,]\d+)?%?(?!\w)")
 _WORD_RE = re.compile(r"[А-ЯЁ][а-яё]{2,}")
 _TERMINAL_MARKERS = (
@@ -10,6 +12,26 @@ _TERMINAL_MARKERS = (
     'разговор закончен',
     'всего доброго',
     'до свидания',
+)
+
+_CONTACT_REPLY_RE = re.compile(
+    r'\b(?:личн\w*\s+(?:контакт\w*|номер\w*)|номер\w*\s+телефон\w*|'
+    r'телефон\w*|контакт\w*|мессенджер\w*|ватсап\w*|whatsapp|телеграм\w*|telegram)\b',
+    re.IGNORECASE,
+)
+_CONTACT_REQUEST_RE = re.compile(
+    r'(?:да(?:й|йте)|остав(?:ь|ьте)|переда(?:й|йте)|подскаж(?:и|ите)|назов(?:и|ите)|'
+    r'пришл(?:и|ите)|скин(?:ь|ьте)|напиш(?:и|ите)|можно\s+(?:ваш|твой)|как\s+с\s+вами\s+связаться)'
+    r'.{0,60}\b(?:контакт\w*|номер\w*|телефон\w*|мессенджер\w*|ватсап\w*|whatsapp|'
+    r'телеграм\w*|telegram)\b|'
+    r'\b(?:контакт\w*|номер\w*|телефон\w*|мессенджер\w*|ватсап\w*|whatsapp|'
+    r'телеграм\w*|telegram)\b.{0,35}(?:да(?:й|йте)|остав(?:ь|ьте)|пришл(?:и|ите)|скин(?:ь|ьте))',
+    re.IGNORECASE,
+)
+_PRICE_REPLY_RE = re.compile(
+    r'\b(?:дорог\w*|дороже|дешевле|цен\w*\s+высок\w*|конкурент\w*.{0,25}\sцен\w*|'
+    r'цен\w*.{0,25}\sне\s+устраива\w*)\b',
+    re.IGNORECASE,
 )
 
 
@@ -50,6 +72,39 @@ def _unsupported_proper_names(reply, source):
     return unknown
 
 
+def contact_request_exists(session, current_text=''):
+    return bool(_CONTACT_REQUEST_RE.search(manager_history(session, current_text)))
+
+
+def _dedupe_sentences(text):
+    parts = re.split(r'(?<=[.!?])\s+', text.strip())
+    result, seen = [], set()
+    for part in parts:
+        key = re.sub(r'\W+', ' ', part.lower().replace('ё', 'е')).strip()
+        if key and key not in seen:
+            result.append(part)
+            seen.add(key)
+    return ' '.join(result)
+
+
+def ground_reply(session, manager_text, reply):
+    """Remove reactions to actions the manager did not actually take."""
+    reply = _dedupe_sentences(reply)
+    if _CONTACT_REPLY_RE.search(reply) and not contact_request_exists(session, manager_text):
+        kept = [
+            part for part in re.split(r'(?<=[.!?])\s+', reply)
+            if not _CONTACT_REPLY_RE.search(part)
+        ]
+        reply = ' '.join(kept).strip() or 'Что конкретно вы предлагаете?'
+    if _PRICE_REPLY_RE.search(reply) and not price_context_exists(session, manager_text):
+        kept = [
+            part for part in re.split(r'(?<=[.!?])\s+', reply)
+            if not _PRICE_REPLY_RE.search(part)
+        ]
+        reply = ' '.join(kept).strip() or 'Что входит в ваше предложение?'
+    return reply
+
+
 def install():
     from .ai import AI
 
@@ -59,6 +114,7 @@ def install():
 
     def guarded_reply(self, session, text, state):
         reply = original_reply(self, session, text, state)
+        reply = ground_reply(session, text, reply)
         source = _source_text(session, text, state)
 
         if _unsupported_numbers(reply, source):

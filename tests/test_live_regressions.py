@@ -79,6 +79,7 @@ class LiveRegressions(unittest.TestCase):
             spoken=[]
             # Establish an actual offer first; contextual objections must not exist before it.
             opening = core.plan(intent='other', action='monologue', reveal_ids=[])
+            s['_current_manager_text'] = 'Подготовили предложение по цене и условиям поставки.'
             s['state'] = apply_behavior(s, opening, reduce_plan(s['state'], opening, s['card']))
             if s['state']['required_objection']:
                 spoken.append(s['state']['required_objection'])
@@ -93,6 +94,7 @@ class LiveRegressions(unittest.TestCase):
 
     def test_focused_training_cannot_refuse_before_objection_is_spoken(self):
         s=self.start()
+        s['_current_manager_text'] = 'Давайте обсудим стоимость предложения.'
         p=core.plan(close='refusal',intent='need')
         state=apply_behavior(s,p,reduce_plan(s['state'],p,s['card']))
         self.assertEqual(state['close'],'continue')

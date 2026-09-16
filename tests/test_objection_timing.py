@@ -19,8 +19,16 @@ class ObjectionTimingTests(unittest.TestCase):
         self.assertEqual(session['state']['required_objection'], '')
 
         second = core.plan(intent='other', action='monologue')
+        session['_current_manager_text'] = 'Мы поставляем керамогранит напрямую с заводов.'
         session['state'] = apply_behavior(
             session, second, reduce_plan(session['state'], second, session['card'])
+        )
+        self.assertEqual(session['state']['required_objection'], '')
+
+        third = core.plan(intent='other', action='monologue')
+        session['_current_manager_text'] = 'Стоимость зависит от объёма, можем подготовить коммерческое предложение.'
+        session['state'] = apply_behavior(
+            session, third, reduce_plan(session['state'], third, session['card'])
         )
         self.assertEqual(session['state']['required_objection'], 'Дорого.')
 

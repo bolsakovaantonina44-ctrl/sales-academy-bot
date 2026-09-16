@@ -1,5 +1,6 @@
 """Small deterministic constraints around the existing planner and client writer."""
 import copy
+import re
 from datetime import datetime, timezone
 
 
@@ -43,6 +44,44 @@ CONTEXT_REQUIRED_BARRIERS = {
 }
 OFFER_CONTEXT_ACTIONS = {'monologue', 'relevant_argument', 'objection_work'}
 
+_PRICE_CONTEXT_RE = re.compile(
+    r'\b(?:цен(?:а|ы|е|у|ой|ою|ам|ами|ах|ник\w*|ов\w*)|стоим\w*|бюджет\w*|'
+    r'скид\w*|дорог\w*|дешев\w*|руб\w*|₽|коммерческ\w+\s+предлож\w*)\b',
+    re.IGNORECASE,
+)
+_CONTACT_BARRIER_RE = re.compile(
+    r'\b(?:личн\w*\s+(?:контакт\w*|номер\w*)|номер\w*\s+телефон\w*|мессенджер\w*|'
+    r'ватсап\w*|whatsapp|телеграм\w*|telegram)\b',
+    re.IGNORECASE,
+)
+_CONTACT_REQUEST_RE = re.compile(
+    r'(?:да(?:й|йте)|остав(?:ь|ьте)|переда(?:й|йте)|подскаж(?:и|ите)|назов(?:и|ите)|'
+    r'пришл(?:и|ите)|скин(?:ь|ьте)|напиш(?:и|ите)|можно\s+(?:ваш|твой)|как\s+с\s+вами\s+связаться)'
+    r'.{0,60}\b(?:контакт\w*|номер\w*|телефон\w*|мессенджер\w*|ватсап\w*|whatsapp|'
+    r'телеграм\w*|telegram)\b',
+    re.IGNORECASE,
+)
+
+
+def manager_history(session, current_text=''):
+    """Only what the manager actually said; scenario goals are deliberately excluded."""
+    messages = [
+        str(item.get('content', ''))
+        for item in session.get('history', [])
+        if item.get('role') == 'user'
+    ]
+    if current_text:
+        messages.append(str(current_text))
+    return ' '.join(messages)
+
+
+def price_context_exists(session, current_text=''):
+    return bool(_PRICE_CONTEXT_RE.search(manager_history(session, current_text)))
+
+
+def contact_context_exists(session, current_text=''):
+    return bool(_CONTACT_REQUEST_RE.search(manager_history(session, current_text)))
+
 
 def prepare_card(card, difficulty, focus=None):
     card = copy.deepcopy(card)
@@ -84,8 +123,17 @@ def prepare_card(card, difficulty, focus=None):
     return card
 
 
-def _barrier_has_context(barrier, offer_context):
+def _barrier_requires_evidence(barrier):
+    return (barrier.get('id') in CONTEXT_REQUIRED_BARRIERS
+            or bool(_CONTACT_BARRIER_RE.search(barrier.get('text', ''))))
+
+
+def _barrier_has_context(barrier, offer_context, price_context=False, contact_context=False):
     """Delay objections that are nonsensical before the client has an offer to react to."""
+    if barrier.get('id') in {'focus_price', 'comparable'}:
+        return price_context
+    if _CONTACT_BARRIER_RE.search(barrier.get('text', '')):
+        return contact_context
     return barrier.get('id') not in CONTEXT_REQUIRED_BARRIERS or offer_context
 
 
@@ -130,7 +178,10 @@ def apply_behavior(session, plan, state):
     due = schedule[min(len(shown), len(schedule) - 1)]
     if unseen and substantive >= due and plan['intent'] != 'name' and state['close'] in ('continue', 'success'):
         b = unseen[0]
-        if forced_focus or _barrier_has_context(b, offer_context):
+        current_text = session.get('_current_manager_text', '')
+        if (forced_focus and not _barrier_requires_evidence(b)) or _barrier_has_context(
+                b, offer_context, price_context_exists(session, current_text),
+                contact_context_exists(session, current_text)):
             state['required_objection'], state['required_objection_id'] = b['text'], b['id']
             state['issues'][b['id']] = 'open'
             state['focus_issue_id'] = b['id']
