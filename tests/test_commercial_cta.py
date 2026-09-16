@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from academy.access import AKENSO, SUPERVISOR, set_role
 from academy.store import Store
 
 
@@ -48,6 +49,14 @@ class CommercialCtaTests(unittest.TestCase):
         self._seed(202, ['completed', 'completed', 'active'])
         store = Store(self.path)
         self.assertEqual(store.outgoing(202), [])
+
+    def test_company_roles_never_receive_public_backfill_offer(self):
+        for user_id, role in ((301, AKENSO), (302, SUPERVISOR)):
+            with self.subTest(role=role):
+                self._seed(user_id, ['completed', 'completed', 'completed'])
+                set_role(self.path, user_id, role)
+                store = Store(self.path)
+                self.assertEqual(store.outgoing(user_id), [])
 
 
 if __name__ == '__main__':
