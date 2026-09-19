@@ -479,6 +479,26 @@ def main():
             except Exception:
                 LOG.exception('Could not deliver sales lead admin=%s', admin_id)
 
+    def _public_limit_reached(user_id):
+        return (
+            int(user_id) not in admins
+            and get_role(path, user_id) == PUBLIC
+            and store.attempts(user_id) >= engine.limit
+        )
+
+    def _send_sales_gate(chat_id, with_history=False):
+        if with_history:
+            bot.send_message(
+                chat_id,
+                engine.history_summary(chat_id),
+                reply_markup=telebot.types.ReplyKeyboardRemove(),
+            )
+        bot.send_message(
+            chat_id,
+            commercial_cta.cta_text(),
+            reply_markup=_sales_main_markup(),
+        )
+
     def context_rows(user_id, context=None):
         context = context or current_context(user_id)
         role = get_role(path, user_id)
@@ -890,6 +910,14 @@ def main():
             else:
                 _send_company_question(chat_id, result['state'])
             return
+
+        if _public_limit_reached(chat_id):
+            if cmd in ('start', '/start', '/new', 'новая тренировка', 'начать тренировку', '/begin'):
+                _send_sales_gate(chat_id)
+                return
+            if cmd in ('мои тренировки', '/history'):
+                _send_sales_gate(chat_id, with_history=True)
+                return
 
         if cmd in ('/sessions', 'сессии пользователей', 'технические сессии'):
             if chat_id in admins:
