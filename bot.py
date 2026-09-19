@@ -829,8 +829,8 @@ def main():
         if str(text).startswith('__academy_pdf__:'):
             deliver_pdf(bot, store, chat_id, text, admins)
             return
-        if commercial_cta.is_cta_text(text):
-            bot.send_message(chat_id, str(text), reply_markup=_sales_main_markup())
+        if commercial_cta.is_limit_offer_text(text):
+            bot.send_message(chat_id, commercial_cta.cta_text(), reply_markup=_sales_main_markup())
             return
         user_id = chat_id
         try:
