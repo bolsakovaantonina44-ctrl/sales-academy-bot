@@ -46,6 +46,15 @@ class CommercialCtaTests(unittest.TestCase):
         Store(self.path)
         self.assertEqual(len(store.outgoing(101)), 1)
 
+    def test_legacy_limit_messages_route_to_current_funnel(self):
+        from academy import commercial_cta
+        self.assertTrue(commercial_cta.is_limit_offer_text(
+            'Использованы все 3 бесплатные тренировки. Сохранённые разборы доступны в «Мои тренировки».'
+        ))
+        self.assertTrue(commercial_cta.is_limit_offer_text(
+            'Вы завершили доступные 3 тренировки.'
+        ))
+
     def test_incomplete_sessions_do_not_trigger_backfill(self):
         self._seed(202, ['completed', 'completed', 'active'])
         store = Store(self.path)
