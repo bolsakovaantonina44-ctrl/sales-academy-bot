@@ -17,13 +17,13 @@ COMPANY_QUESTIONS = (
     {'key': 'industry', 'prompt': 'Чем занимается компания?'},
     {'key': 'team_size', 'prompt': 'Сколько сотрудников планируете обучать?',
      'options': (('1–5', '1-5'), ('6–15', '6-15'), ('16–50', '16-50'), ('50+', '50+'))},
-    {'key': 'goal', 'prompt': 'Какая задача сейчас приоритетна?',
+    {'key': 'goal', 'prompt': 'Что хотите решить с помощью Академии? Можно выбрать несколько вариантов.',
+     'multiple': True,
      'options': (
          ('Обучение новичков', 'onboarding'),
          ('Тренировка продаж', 'training'),
          ('Аттестация', 'assessment'),
          ('База знаний и регламенты', 'knowledge'),
-         ('Всё вместе', 'all'),
      )},
     {'key': 'knowledge', 'prompt': 'Есть ли сейчас база знаний и регламенты?',
      'options': (('Да', 'yes'), ('Частично', 'partial'), ('Нет', 'no'))},
@@ -64,6 +64,16 @@ def cta_text():
         'Вы прошли 3 бесплатные тренировки и получили разбор своих навыков.\n\n'
         'Выберите, как хотите продолжить: тренироваться самостоятельно '
         'или подключить Академию для компании.'
+    )
+
+
+def company_intro_text():
+    return (
+        'АКАДЕМИЯ ДЛЯ ВАШЕЙ КОМАНДЫ\n\n'
+        'Настроим систему под ваши продажи: обучение новичков, AI-тренировки, '
+        'база знаний и регламенты, аттестация и отчёты руководителю.\n\n'
+        'Ответьте на 7 коротких вопросов — это займёт около 2 минут. '
+        'Мы посмотрим вашу задачу и свяжемся с вами, чтобы показать подходящий формат.'
     )
 
 
@@ -167,8 +177,55 @@ def cancel_company(path, user_id):
         db.execute('DELETE FROM sales_funnel_state WHERE user_id=?', (int(user_id),))
 
 
+def toggle_company_option(path, user_id, value):
+    state = company_state(path, user_id)
+    if not state:
+        raise LookupError('Company questionnaire is not active')
+    question = state['question']
+    if not question.get('multiple'):
+        raise ValueError('Question is not multi-select')
+    allowed = {item[1] for item in question.get('options', ())}
+    if value not in allowed:
+        raise ValueError('Choose one of the offered options')
+    data = dict(state['data'])
+    selected = list(data.get(question['key']) or [])
+    if value in selected:
+        selected.remove(value)
+    else:
+        selected.append(value)
+    data[question['key']] = selected
+    with _connect(path) as db:
+        db.execute(
+            'UPDATE sales_funnel_state SET data=?,updated_at=? WHERE user_id=?',
+            (json.dumps(data, ensure_ascii=False), _now(), int(user_id)),
+        )
+    return company_state(path, user_id)
+
+
+def finish_company_multi(path, user_id):
+    state = company_state(path, user_id)
+    if not state:
+        raise LookupError('Company questionnaire is not active')
+    question = state['question']
+    if not question.get('multiple'):
+        raise ValueError('Question is not multi-select')
+    data = dict(state['data'])
+    selected = list(data.get(question['key']) or [])
+    if not selected:
+        raise ValueError('Select at least one option')
+    next_step = state['step'] + 1
+    with _connect(path) as db:
+        db.execute(
+            'UPDATE sales_funnel_state SET step=?,data=?,updated_at=? WHERE user_id=?',
+            (next_step, json.dumps(data, ensure_ascii=False), _now(), int(user_id)),
+        )
+    return company_state(path, user_id)
+
+
 def _normalize_answer(question, value):
     value = ' '.join(str(value or '').split()).strip()
+    if question.get('multiple'):
+        raise ValueError('Use multi-select controls')
     if question.get('options'):
         allowed = {item[1] for item in question['options']}
         if value not in allowed:
@@ -235,7 +292,11 @@ def company_lead_text(lead_id, user_id, data, training_summary=''):
         f"Компания: {data.get('company_name', '—')}",
         f"Сфера: {data.get('industry', '—')}",
         f"Сотрудников: {OPTION_LABELS.get(data.get('team_size'), data.get('team_size', '—'))}",
-        f"Задача: {OPTION_LABELS.get(data.get('goal'), data.get('goal', '—'))}",
+        "Задачи: " + (
+            ', '.join(OPTION_LABELS.get(value, value) for value in (data.get('goal') or []))
+            if isinstance(data.get('goal'), list)
+            else OPTION_LABELS.get(data.get('goal'), data.get('goal', '—'))
+        ),
         f"База знаний: {OPTION_LABELS.get(data.get('knowledge'), data.get('knowledge', '—'))}",
         f"Имя: {data.get('contact_name', '—')}",
         f"Контакт: {data.get('contact', '—')}",

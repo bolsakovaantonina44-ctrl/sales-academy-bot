@@ -427,9 +427,18 @@ def main():
         if not options:
             return None
         markup = telebot.types.InlineKeyboardMarkup(row_width=1)
+        selected = set(state.get('data', {}).get(question['key']) or []) if question.get('multiple') else set()
         for label, value in options:
+            if question.get('multiple'):
+                shown = ('✅ ' if value in selected else '⬜️ ') + label
+                callback = f"sales:toggle:{state['step']}:{value}"
+            else:
+                shown = label
+                callback = f"sales:answer:{state['step']}:{value}"
+            markup.add(telebot.types.InlineKeyboardButton(shown, callback_data=callback))
+        if question.get('multiple'):
             markup.add(telebot.types.InlineKeyboardButton(
-                label, callback_data=f"sales:answer:{state['step']}:{value}"
+                'Готово ✓', callback_data=f"sales:done:{state['step']}"
             ))
         markup.add(telebot.types.InlineKeyboardButton('Отменить', callback_data='sales:cancel'))
         return markup
@@ -983,6 +992,20 @@ def main():
                 bot.answer_callback_query(call.id)
                 return
             if action == 'company':
+                markup = telebot.types.InlineKeyboardMarkup(row_width=1)
+                markup.add(telebot.types.InlineKeyboardButton(
+                    'Заполнить короткую анкету →', callback_data='sales:company_start'
+                ))
+                markup.add(telebot.types.InlineKeyboardButton('← Назад', callback_data='sales:back'))
+                bot.edit_message_text(
+                    commercial_cta.company_intro_text(),
+                    chat_id,
+                    call.message.message_id,
+                    reply_markup=markup,
+                )
+                bot.answer_callback_query(call.id)
+                return
+            if action == 'company_start':
                 state = commercial_cta.start_company(
                     path, chat_id, _telegram_profile(call.from_user)
                 )
@@ -1030,6 +1053,28 @@ def main():
                     'по Telegram. После подключения платёжной ссылки эта кнопка будет вести '
                     'сразу на оплату.',
                 )
+                return
+            if action == 'toggle':
+                state = commercial_cta.company_state(path, chat_id)
+                if not state or str(state['step']) != parts[2]:
+                    bot.answer_callback_query(call.id, 'Этот шаг уже обновлён.', show_alert=True)
+                    return
+                state = commercial_cta.toggle_company_option(path, chat_id, parts[3])
+                _send_company_question(chat_id, state, call.message.message_id)
+                bot.answer_callback_query(call.id)
+                return
+            if action == 'done':
+                state = commercial_cta.company_state(path, chat_id)
+                if not state or str(state['step']) != parts[2]:
+                    bot.answer_callback_query(call.id, 'Этот шаг уже обновлён.', show_alert=True)
+                    return
+                try:
+                    state = commercial_cta.finish_company_multi(path, chat_id)
+                except ValueError:
+                    bot.answer_callback_query(call.id, 'Выберите хотя бы один вариант.', show_alert=True)
+                    return
+                _send_company_question(chat_id, state, call.message.message_id)
+                bot.answer_callback_query(call.id)
                 return
             if action == 'answer':
                 state = commercial_cta.company_state(path, chat_id)
