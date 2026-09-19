@@ -17,13 +17,11 @@ COMPANY_QUESTIONS = (
     {'key': 'industry', 'prompt': 'Чем занимается компания?'},
     {'key': 'team_size', 'prompt': 'Сколько сотрудников планируете обучать?',
      'options': (('1–5', '1-5'), ('6–15', '6-15'), ('16–50', '16-50'), ('50+', '50+'))},
-    {'key': 'goal', 'prompt': 'Что хотите решить с помощью Академии? Можно выбрать несколько вариантов.',
-     'multiple': True,
+    {'key': 'goal', 'prompt': 'Какой формат вам ближе?',
      'options': (
-         ('Обучение новичков', 'onboarding'),
-         ('Тренировка продаж', 'training'),
-         ('Аттестация', 'assessment'),
-         ('База знаний и регламенты', 'knowledge'),
+         ('Всё вместе', 'all'),
+         ('Только AI-тренировки', 'training_only'),
+         ('База знаний + регламенты + AI-тренировки', 'knowledge_training'),
      )},
     {'key': 'knowledge', 'prompt': 'Есть ли сейчас база знаний и регламенты?',
      'options': (('Да', 'yes'), ('Частично', 'partial'), ('Нет', 'no'))},
@@ -41,6 +39,8 @@ OPTION_LABELS = {
     'assessment': 'Аттестация',
     'knowledge': 'База знаний и регламенты',
     'all': 'Всё вместе',
+    'training_only': 'Только AI-тренировки',
+    'knowledge_training': 'База знаний + регламенты + AI-тренировки',
     'yes': 'Да',
     'partial': 'Частично',
     'no': 'Нет',
@@ -292,11 +292,7 @@ def company_lead_text(lead_id, user_id, data, training_summary=''):
         f"Компания: {data.get('company_name', '—')}",
         f"Сфера: {data.get('industry', '—')}",
         f"Сотрудников: {OPTION_LABELS.get(data.get('team_size'), data.get('team_size', '—'))}",
-        "Задачи: " + (
-            ', '.join(OPTION_LABELS.get(value, value) for value in (data.get('goal') or []))
-            if isinstance(data.get('goal'), list)
-            else OPTION_LABELS.get(data.get('goal'), data.get('goal', '—'))
-        ),
+        f"Формат: {OPTION_LABELS.get(data.get('goal'), data.get('goal', '—'))}",
         f"База знаний: {OPTION_LABELS.get(data.get('knowledge'), data.get('knowledge', '—'))}",
         f"Имя: {data.get('contact_name', '—')}",
         f"Контакт: {data.get('contact', '—')}",
