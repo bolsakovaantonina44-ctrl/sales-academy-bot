@@ -28,6 +28,7 @@ from academy.ui_policy import (
 )
 from academy import assessment
 from academy import admission
+from academy import commercial_cta
 
 LOG = logging.getLogger('academy')
 TELEGRAM_ALLOWED_UPDATES = ['message', 'callback_query']
@@ -390,6 +391,85 @@ def main():
             markup.row(*[telebot.types.KeyboardButton(value) for value in row])
         return markup
 
+    def _telegram_profile(user):
+        return {
+            'username': getattr(user, 'username', None),
+            'first_name': getattr(user, 'first_name', None),
+            'last_name': getattr(user, 'last_name', None),
+        }
+
+    def _sales_main_markup():
+        markup = telebot.types.InlineKeyboardMarkup(row_width=1)
+        markup.add(
+            telebot.types.InlineKeyboardButton('👤 Продолжить для себя', callback_data='sales:self'),
+            telebot.types.InlineKeyboardButton('👥 Подключить для компании', callback_data='sales:company'),
+        )
+        return markup
+
+    def _individual_markup():
+        markup = telebot.types.InlineKeyboardMarkup(row_width=1)
+        plan_10 = f'10 тренировок — {commercial_cta.INDIVIDUAL_10_PRICE:,} ₽'.replace(',', ' ')
+        plan_month = f'Безлимит на 30 дней — {commercial_cta.INDIVIDUAL_MONTH_PRICE:,} ₽'.replace(',', ' ')
+        url_10 = commercial_cta.payment_url('10')
+        url_month = commercial_cta.payment_url('month')
+        markup.add(telebot.types.InlineKeyboardButton(
+            plan_10, url=url_10) if url_10 else telebot.types.InlineKeyboardButton(
+            plan_10, callback_data='sales:plan:10'))
+        markup.add(telebot.types.InlineKeyboardButton(
+            plan_month, url=url_month) if url_month else telebot.types.InlineKeyboardButton(
+            plan_month, callback_data='sales:plan:month'))
+        markup.add(telebot.types.InlineKeyboardButton('← Назад', callback_data='sales:back'))
+        return markup
+
+    def _company_question_markup(state):
+        question = state['question']
+        options = question.get('options') or ()
+        if not options:
+            return None
+        markup = telebot.types.InlineKeyboardMarkup(row_width=1)
+        for label, value in options:
+            markup.add(telebot.types.InlineKeyboardButton(
+                label, callback_data=f"sales:answer:{state['step']}:{value}"
+            ))
+        markup.add(telebot.types.InlineKeyboardButton('Отменить', callback_data='sales:cancel'))
+        return markup
+
+    def _send_company_question(chat_id, state, edit_message=None):
+        question = state['question']
+        prefix = f"Заявка для компании · шаг {state['step'] + 1} из {len(commercial_cta.COMPANY_QUESTIONS)}\n\n"
+        text = prefix + question['prompt']
+        markup = _company_question_markup(state)
+        if edit_message is not None:
+            try:
+                bot.edit_message_text(text, chat_id, edit_message, reply_markup=markup)
+                return
+            except Exception:
+                pass
+        bot.send_message(chat_id, text, reply_markup=markup)
+
+    def _training_summary(user_id):
+        rows = []
+        for item in store.recent(user_id):
+            if item.get('phase') != 'completed':
+                continue
+            score = total_score(item.get('report_data'))
+            if score is None:
+                continue
+            focus = FOCUS_OBJECTIONS.get(item.get('training_focus'), {}).get('label', 'Общий разговор')
+            rows.append(f"• #{item.get('id')}: {score}/100 · {focus}")
+            if len(rows) >= 3:
+                break
+        attempts = store.attempts(user_id)
+        head = f'Завершено бесплатных тренировок: {min(attempts, engine.limit)} из {engine.limit}'
+        return '\n'.join([head] + rows)
+
+    def _notify_sales_admins(text):
+        for admin_id in set(admins):
+            try:
+                bot.send_message(admin_id, text)
+            except Exception:
+                LOG.exception('Could not deliver sales lead admin=%s', admin_id)
+
     def context_rows(user_id, context=None):
         context = context or current_context(user_id)
         role = get_role(path, user_id)
@@ -749,6 +829,9 @@ def main():
         if str(text).startswith('__academy_pdf__:'):
             deliver_pdf(bot, store, chat_id, text, admins)
             return
+        if commercial_cta.is_cta_text(text):
+            bot.send_message(chat_id, str(text), reply_markup=_sales_main_markup())
+            return
         user_id = chat_id
         try:
             if str(text).startswith(('Завершаю тренировку.', 'Разбор уже формируется.')):
@@ -769,6 +852,35 @@ def main():
         chat_id = message.chat.id
         cmd = normalize_command(message.text or '')
         role = get_role(path, chat_id)
+
+        funnel_state = commercial_cta.company_state(path, chat_id)
+        if funnel_state:
+            if cmd in ('/cancel', 'отмена'):
+                commercial_cta.cancel_company(path, chat_id)
+                bot.send_message(chat_id, 'Заявка отменена.', reply_markup=_sales_main_markup())
+                return
+            if funnel_state['question'].get('options'):
+                _send_company_question(chat_id, funnel_state)
+                return
+            try:
+                result = commercial_cta.answer_company(path, chat_id, message.text or '')
+            except ValueError:
+                bot.send_message(chat_id, 'Пожалуйста, напишите ответ чуть подробнее.')
+                return
+            if result['finished']:
+                lead_text = commercial_cta.company_lead_text(
+                    result['lead_id'], chat_id, result['data'], _training_summary(chat_id)
+                )
+                _notify_sales_admins(lead_text)
+                bot.send_message(
+                    chat_id,
+                    'Спасибо! Заявка получена.\n\n'
+                    'Специалист Академии свяжется с вами, уточнит задачи и покажет, '
+                    'как настроить систему под вашу команду.',
+                )
+            else:
+                _send_company_question(chat_id, result['state'])
+            return
 
         if cmd in ('/sessions', 'сессии пользователей', 'технические сессии'):
             if chat_id in admins:
@@ -854,6 +966,99 @@ def main():
 
         receive_text(store, f'tg:{chat_id}:{message.message_id}', chat_id, chat_id,
                      'text', message.text or '', send)
+
+    @bot.callback_query_handler(func=lambda call: str(call.data or '').startswith('sales:'))
+    def on_sales_callback(call):
+        chat_id = call.message.chat.id
+        try:
+            parts = str(call.data).split(':')
+            action = parts[1]
+            if action == 'self':
+                bot.edit_message_text(
+                    commercial_cta.individual_text(),
+                    chat_id,
+                    call.message.message_id,
+                    reply_markup=_individual_markup(),
+                )
+                bot.answer_callback_query(call.id)
+                return
+            if action == 'company':
+                state = commercial_cta.start_company(
+                    path, chat_id, _telegram_profile(call.from_user)
+                )
+                _send_company_question(chat_id, state, call.message.message_id)
+                bot.answer_callback_query(call.id)
+                return
+            if action == 'back':
+                commercial_cta.cancel_company(path, chat_id)
+                bot.edit_message_text(
+                    commercial_cta.cta_text(),
+                    chat_id,
+                    call.message.message_id,
+                    reply_markup=_sales_main_markup(),
+                )
+                bot.answer_callback_query(call.id)
+                return
+            if action == 'cancel':
+                commercial_cta.cancel_company(path, chat_id)
+                bot.edit_message_text(
+                    commercial_cta.cta_text(),
+                    chat_id,
+                    call.message.message_id,
+                    reply_markup=_sales_main_markup(),
+                )
+                bot.answer_callback_query(call.id, 'Заявка отменена.')
+                return
+            if action == 'plan':
+                plan = parts[2]
+                lead_id = commercial_cta.record_individual_interest(
+                    path, chat_id, plan, _telegram_profile(call.from_user)
+                )
+                _notify_sales_admins(commercial_cta.individual_lead_text(
+                    lead_id, chat_id, plan, _telegram_profile(call.from_user)
+                ))
+                label = (
+                    f'{commercial_cta.INDIVIDUAL_10_PRICE:,} ₽ за 10 тренировок'
+                    if plan == '10'
+                    else f'{commercial_cta.INDIVIDUAL_MONTH_PRICE:,} ₽ за 30 дней безлимита'
+                ).replace(',', ' ')
+                bot.answer_callback_query(call.id, 'Тариф выбран.')
+                bot.send_message(
+                    chat_id,
+                    f'Вы выбрали тариф: {label}.\n\n'
+                    'Заявка на подключение отправлена. Специалист Академии свяжется с вами '
+                    'по Telegram. После подключения платёжной ссылки эта кнопка будет вести '
+                    'сразу на оплату.',
+                )
+                return
+            if action == 'answer':
+                state = commercial_cta.company_state(path, chat_id)
+                if not state or str(state['step']) != parts[2]:
+                    bot.answer_callback_query(call.id, 'Этот шаг уже обновлён.', show_alert=True)
+                    return
+                result = commercial_cta.answer_company(path, chat_id, parts[3])
+                if result['finished']:
+                    _notify_sales_admins(commercial_cta.company_lead_text(
+                        result['lead_id'], chat_id, result['data'], _training_summary(chat_id)
+                    ))
+                    bot.edit_message_text(
+                        'Спасибо! Заявка получена.\n\n'
+                        'Специалист Академии свяжется с вами, уточнит задачи и покажет, '
+                        'как настроить систему под вашу команду.',
+                        chat_id,
+                        call.message.message_id,
+                    )
+                else:
+                    _send_company_question(chat_id, result['state'], call.message.message_id)
+                bot.answer_callback_query(call.id)
+                return
+            bot.answer_callback_query(call.id, 'Неизвестная команда.', show_alert=True)
+        except Exception:
+            LOG.exception('Sales funnel callback failed')
+            try:
+                bot.answer_callback_query(call.id, 'Не удалось обработать действие. Попробуйте ещё раз.', show_alert=True)
+            except Exception:
+                pass
 
     @bot.callback_query_handler(func=lambda call: str(call.data or '').startswith('team:'))
     def on_team_callback(call):
