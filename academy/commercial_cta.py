@@ -71,6 +71,15 @@ def is_cta_text(value):
     return CTA_HEADING in str(value or '')
 
 
+def is_limit_offer_text(value):
+    text = str(value or '')
+    return (
+        is_cta_text(text)
+        or ('Использованы все ' in text and 'бесплатные тренировки' in text)
+        or ('Вы завершили доступные ' in text and 'тренировки' in text)
+    )
+
+
 def individual_text():
     return (
         'ПРОДОЛЖИТЬ ДЛЯ СЕБЯ\n\n'
