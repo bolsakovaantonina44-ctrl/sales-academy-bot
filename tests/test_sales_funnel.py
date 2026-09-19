@@ -28,23 +28,22 @@ class SalesFunnelTests(unittest.TestCase):
         )
         self.assertEqual(state['question']['key'], 'company_name')
 
-        for value in ['ООО Тест', 'Производство', '16-50']:
-            result = commercial_cta.answer_company(self.path, 101, value)
-
-        state = commercial_cta.company_state(self.path, 101)
-        self.assertTrue(state['question']['multiple'])
-        commercial_cta.toggle_company_option(self.path, 101, 'onboarding')
-        commercial_cta.toggle_company_option(self.path, 101, 'knowledge')
-        state = commercial_cta.finish_company_multi(self.path, 101)
-        self.assertEqual(state['question']['key'], 'knowledge')
-
+        answers = [
+            'ООО Тест',
+            'Производство',
+            '16-50',
+            'knowledge_training',
+            'partial',
+            'Иван',
+            '@buyer',
+        ]
         result = None
-        for value in ['partial', 'Иван', '@buyer']:
+        for value in answers:
             result = commercial_cta.answer_company(self.path, 101, value)
 
         self.assertTrue(result['finished'])
         self.assertEqual(result['data']['team_size'], '16-50')
-        self.assertEqual(result['data']['goal'], ['onboarding', 'knowledge'])
+        self.assertEqual(result['data']['goal'], 'knowledge_training')
         self.assertIsNone(commercial_cta.company_state(self.path, 101))
 
         with Store(self.path).db() as db:
@@ -63,13 +62,16 @@ class SalesFunnelTests(unittest.TestCase):
         self.assertIn('аттестация', text.lower())
         self.assertIn('2 минут', text)
 
-    def test_multiselect_requires_at_least_one_goal(self):
-        commercial_cta.start_company(self.path, 303)
-        commercial_cta.answer_company(self.path, 303, 'ООО Тест')
-        commercial_cta.answer_company(self.path, 303, 'Опт')
-        commercial_cta.answer_company(self.path, 303, '1-5')
-        with self.assertRaises(ValueError):
-            commercial_cta.finish_company_multi(self.path, 303)
+    def test_company_format_has_three_clear_packages(self):
+        options = commercial_cta.COMPANY_QUESTIONS[3]['options']
+        self.assertEqual(
+            options,
+            (
+                ('Всё вместе', 'all'),
+                ('Только AI-тренировки', 'training_only'),
+                ('База знаний + регламенты + AI-тренировки', 'knowledge_training'),
+            ),
+        )
 
     def test_individual_interest_records_selected_plan(self):
         lead_id = commercial_cta.record_individual_interest(
