@@ -188,6 +188,8 @@ def _save_voice_draft(store, event, transcript):
             if not row:
                 raise
             attempt_id = row[0]
+    summary = _voice_self_correction_summary(_voice_attempts_for_session(store, session_id))
+    session['voice_self_correction'] = summary
     store.commit(event, session, [], counted=False)
     return attempt_id, int(previous) + 1
 
@@ -210,6 +212,28 @@ def _voice_attempts_for_session(store, session_id):
             (int(session_id),),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def _voice_self_correction_summary(attempts):
+    attempts = list(attempts or [])
+    return {
+        'total_attempts': len(attempts),
+        'replaced_attempts': sum(1 for item in attempts if item.get('status') == 'replaced'),
+        'confirmed_attempts': sum(1 for item in attempts if item.get('status') == 'confirmed'),
+        'pending_attempts': sum(1 for item in attempts if item.get('status') == 'pending'),
+    }
+
+
+def _sync_voice_self_correction(store, user_id, session_id):
+    if not session_id:
+        return {}
+    summary = _voice_self_correction_summary(_voice_attempts_for_session(store, session_id))
+    store.update_session_fields(
+        user_id,
+        session_id,
+        voice_self_correction=summary,
+    )
+    return summary
 
 
 def _direct_lpr_known(session):
@@ -1142,6 +1166,7 @@ def main():
                         "UPDATE voice_attempts SET status='replaced' WHERE id=? AND status='pending'",
                         (attempt_id,),
                     )
+                _sync_voice_self_correction(store, chat_id, attempt.get('session_id'))
                 bot.edit_message_text(
                     f"Попытка {attempt['attempt_no']} сохранена для разбора и помечена как перезаписанная.\n\n"
                     "Запишите новый голосовой ответ — предыдущая версия не удалится.",
@@ -1160,6 +1185,7 @@ def main():
                         "WHERE id=? AND status='pending'",
                         (attempt_id,),
                     )
+                _sync_voice_self_correction(store, chat_id, attempt.get('session_id'))
                 bot.edit_message_text(
                     f"✅ Попытка {attempt['attempt_no']} отправлена клиенту.\n\n"
                     f"«{attempt['transcript']}»",
