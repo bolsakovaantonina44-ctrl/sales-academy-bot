@@ -110,6 +110,25 @@ def recommended_training_cases(data, session):
     return [cases[key] for key in priorities[:2]]
 
 
+def voice_self_correction_lines(session):
+    summary = session.get('voice_self_correction') or {}
+    total = int(summary.get('total_attempts') or 0)
+    replaced = int(summary.get('replaced_attempts') or 0)
+    confirmed = int(summary.get('confirmed_attempts') or 0)
+    if not total:
+        return []
+    lines = [
+        f'Голосовых версий: {total}.',
+        f'Перезаписано сотрудником: {replaced}.',
+        f'Подтверждено и отправлено клиенту: {confirmed}.',
+    ]
+    if replaced:
+        lines.append('Сотрудник использовал самокоррекцию до отправки ответа клиенту.')
+    else:
+        lines.append('Повторная запись в этой тренировке не использовалась.')
+    return lines
+
+
 def manager_summary(data, session):
     score = total_score(data)
     employee = session.get('employee', {})
@@ -136,6 +155,11 @@ def manager_summary(data, session):
     if training_cases:
         lines += ['', 'Как использовать тренажёр дальше:']
         lines += ['• Повторить тренировку: ' + item for item in training_cases]
+    self_correction = voice_self_correction_lines(session)
+    if self_correction:
+        lines += ['', 'Самокоррекция:']
+        lines += ['• ' + item for item in self_correction]
+
     previous = session.get('comparison')
     lines += ['', 'Динамика:']
     if previous and score is not None:
