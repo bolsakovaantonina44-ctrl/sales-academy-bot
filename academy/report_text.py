@@ -1,6 +1,6 @@
 """Compact Telegram report rendering. Evidence stays in structured data/PDF, not chat walls."""
 from .domain import SKILLS, score_level
-from .reporting import fallback_data, recommended_training_cases
+from .reporting import fallback_data, recommended_training_cases, voice_self_correction_lines
 
 
 def _short(text, limit=220):
@@ -45,6 +45,9 @@ def render_report(data, session, include_hidden=False):
     if training_cases:
         lines += ['', 'КАК ИСПОЛЬЗОВАТЬ ТРЕНАЖЁР ДАЛЬШЕ']
         lines += ['• Повторить тренировку: ' + item for item in training_cases]
+    self_correction = voice_self_correction_lines(session)
+    if self_correction:
+        lines += ['', 'САМОКОРРЕКЦИЯ'] + ['• ' + item for item in self_correction]
     if data.get('findings'):
         lines += ['', 'ЧТО УДАЛОСЬ ВЫЯСНИТЬ'] + ['• ' + _short(x['text'], 170) for x in data['findings'][:3]]
 
