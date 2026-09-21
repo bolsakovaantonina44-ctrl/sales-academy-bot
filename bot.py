@@ -134,6 +134,84 @@ def receive_text(store, event_key, user_id, chat_id, kind, text, send):
     return accepted
 
 
+def ensure_voice_attempt_schema(db_path):
+    """Persist every voice draft so self-correction remains visible after restarts."""
+    import sqlite3
+    with sqlite3.connect(db_path) as db:
+        db.execute(
+            """CREATE TABLE IF NOT EXISTS voice_attempts(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                chat_id INTEGER NOT NULL,
+                session_id INTEGER,
+                source_event_id INTEGER NOT NULL UNIQUE,
+                file_id TEXT NOT NULL,
+                transcript TEXT NOT NULL,
+                attempt_no INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                confirmed_at TEXT
+            )"""
+        )
+        db.execute("CREATE INDEX IF NOT EXISTS idx_voice_attempts_session ON voice_attempts(session_id,id)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_voice_attempts_user_status ON voice_attempts(user_id,status)")
+
+
+def _save_voice_draft(store, event, transcript):
+    """Save a voice version without exposing it to the simulated client yet."""
+    session = store.current(event['user_id'])
+    session_id = session.get('id')
+    with store.db() as db:
+        db.execute(
+            "UPDATE voice_attempts SET status='replaced' "
+            "WHERE user_id=? AND session_id IS ? AND status='pending'",
+            (event['user_id'], session_id),
+        )
+        previous = db.execute(
+            "SELECT COALESCE(MAX(attempt_no),0) FROM voice_attempts "
+            "WHERE user_id=? AND session_id IS ?",
+            (event['user_id'], session_id),
+        ).fetchone()[0]
+        try:
+            attempt_id = db.execute(
+                "INSERT INTO voice_attempts("
+                "user_id,chat_id,session_id,source_event_id,file_id,transcript,attempt_no,status"
+                ") VALUES(?,?,?,?,?,?,?,'pending')",
+                (event['user_id'], event['chat_id'], session_id, event['id'],
+                 event.get('raw_text') or event['text'], transcript, int(previous) + 1),
+            ).lastrowid
+        except Exception:
+            row = db.execute(
+                "SELECT id FROM voice_attempts WHERE source_event_id=?",
+                (event['id'],),
+            ).fetchone()
+            if not row:
+                raise
+            attempt_id = row[0]
+    store.commit(event, session, [], counted=False)
+    return attempt_id, int(previous) + 1
+
+
+def _voice_attempt(store, attempt_id, user_id):
+    with store.db() as db:
+        row = db.execute(
+            "SELECT * FROM voice_attempts WHERE id=? AND user_id=?",
+            (int(attempt_id), int(user_id)),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def _voice_attempts_for_session(store, session_id):
+    if not session_id:
+        return []
+    with store.db() as db:
+        rows = db.execute(
+            "SELECT * FROM voice_attempts WHERE session_id=? ORDER BY id",
+            (int(session_id),),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def _direct_lpr_known(session):
     """Skip the gate only when setup explicitly says the manager already has the target contact."""
     setup = ' '.join(str(x.get('content', '')) for x in session.get('setup', []) if isinstance(x, dict)).lower()
@@ -297,8 +375,9 @@ def worker(store, engine, ai, bot, stop, send):
                 bot.send_chat_action(event['chat_id'], 'typing')
             except Exception:
                 pass
-            stage = 'transcription' if event['kind'] == 'voice' else 'conversation'
-            if event['kind'] == 'voice':
+            stage = 'transcription' if event['kind'] in ('voice', 'voice_draft') else 'conversation'
+            if event['kind'] in ('voice', 'voice_draft'):
+                original_kind = event['kind']
                 info = bot.get_file(event['text'])
                 raw = bot.download_file(info.file_path)
                 if len(raw) > 10 * 1024 * 1024:
@@ -309,6 +388,22 @@ def worker(store, engine, ai, bot, stop, send):
                 text = transcript.text.strip()
                 if not text or len(text) > 5000:
                     raise ValueError('Transcription empty or too long')
+                if original_kind == 'voice_draft':
+                    attempt_id, attempt_no = _save_voice_draft(store, event, text)
+                    import telebot as _telebot
+                    markup = _telebot.types.InlineKeyboardMarkup(row_width=2)
+                    markup.row(
+                        _telebot.types.InlineKeyboardButton('✅ Отправить ответ', callback_data=f'voice:confirm:{attempt_id}'),
+                        _telebot.types.InlineKeyboardButton('🔄 Перезаписать', callback_data=f'voice:redo:{attempt_id}'),
+                    )
+                    bot.send_message(
+                        event['chat_id'],
+                        f'Голосовой ответ сохранён как попытка {attempt_no}.\n\n'
+                        f'Расшифровка: «{text}»\n\n'
+                        'Отправить этот вариант клиенту или записать новый?',
+                        reply_markup=markup,
+                    )
+                    continue
                 store.cache_text(event['id'], text)
                 event.update(kind='text', text=text)
                 stage = 'conversation'
@@ -356,6 +451,7 @@ def main():
             os.getenv('OPENAI_EVAL_MODEL', model))
     LOG.info('Startup: opening persistent database at %s', path)
     store = Store(path)
+    ensure_voice_attempt_schema(path)
     store.recover()
     with store.db() as db:
         persisted = db.execute('SELECT COUNT(*), COALESCE(SUM(counted),0) FROM sessions').fetchone()
@@ -598,7 +694,15 @@ def main():
             client_bits = [str(v).strip() for v in client_bits if str(v or '').strip()]
             if client_bits:
                 lines.append('Карточка клиента: ' + ' · '.join(client_bits))
+        voice_attempts = _voice_attempts_for_session(store, session_id)
         lines.append(f"Реплик в диалоге: {len(s.get('history') or [])}")
+        if voice_attempts:
+            replaced = sum(1 for item in voice_attempts if item.get('status') == 'replaced')
+            confirmed = sum(1 for item in voice_attempts if item.get('status') == 'confirmed')
+            lines.append(
+                f"Голосовых попыток: {len(voice_attempts)} · "
+                f"перезаписано: {replaced} · подтверждено: {confirmed}"
+            )
         return '\n'.join(lines)
 
     def admin_session_markup(session_id, page=0):
@@ -631,6 +735,15 @@ def main():
             content = str(item.get('content', '')).strip()
             if content:
                 lines.append(f'{index}. {speaker}: {content}')
+        attempts = _voice_attempts_for_session(store, session_id)
+        if attempts:
+            lines.extend(['', '🎙 ГОЛОСОВЫЕ ПОПЫТКИ'])
+            labels = {'pending': 'ожидает решения', 'replaced': 'перезаписана', 'confirmed': 'отправлена клиенту'}
+            for item in attempts:
+                lines.append(
+                    f"Попытка {item['attempt_no']} · {labels.get(item['status'], item['status'])}: "
+                    f"{item['transcript']}"
+                )
         return chunks('\n\n'.join(lines), limit=3800)
 
     def send_admin_sessions(chat_id, page=0, edit_message=None):
@@ -1004,6 +1117,65 @@ def main():
         receive_text(store, f'tg:{chat_id}:{message.message_id}', chat_id, chat_id,
                      'text', message.text or '', send)
 
+    @bot.callback_query_handler(func=lambda call: str(call.data or '').startswith('voice:'))
+    def on_voice_attempt_callback(call):
+        chat_id = call.message.chat.id
+        try:
+            parts = str(call.data).split(':')
+            action = parts[1]
+            attempt_id = int(parts[2])
+            attempt = _voice_attempt(store, attempt_id, chat_id)
+            if not attempt:
+                bot.answer_callback_query(call.id, 'Попытка не найдена.', show_alert=True)
+                return
+            if attempt['status'] != 'pending':
+                label = 'уже отправлена' if attempt['status'] == 'confirmed' else 'уже заменена'
+                bot.answer_callback_query(call.id, f'Эта попытка {label}.', show_alert=True)
+                return
+            current = store.current(chat_id)
+            if current.get('id') != attempt.get('session_id') or current.get('phase') != 'active':
+                bot.answer_callback_query(call.id, 'Эта тренировка уже не активна.', show_alert=True)
+                return
+            if action == 'redo':
+                with store.db() as db:
+                    db.execute(
+                        "UPDATE voice_attempts SET status='replaced' WHERE id=? AND status='pending'",
+                        (attempt_id,),
+                    )
+                bot.edit_message_text(
+                    f"Попытка {attempt['attempt_no']} сохранена для разбора и помечена как перезаписанная.\n\n"
+                    "Запишите новый голосовой ответ — предыдущая версия не удалится.",
+                    chat_id,
+                    call.message.message_id,
+                )
+                bot.answer_callback_query(call.id, 'Запишите новый вариант.')
+                return
+            if action == 'confirm':
+                accepted = store.enqueue(
+                    f'voice-confirm:{attempt_id}', chat_id, chat_id, 'text', attempt['transcript']
+                )
+                with store.db() as db:
+                    db.execute(
+                        "UPDATE voice_attempts SET status='confirmed', confirmed_at=CURRENT_TIMESTAMP "
+                        "WHERE id=? AND status='pending'",
+                        (attempt_id,),
+                    )
+                bot.edit_message_text(
+                    f"✅ Попытка {attempt['attempt_no']} отправлена клиенту.\n\n"
+                    f"«{attempt['transcript']}»",
+                    chat_id,
+                    call.message.message_id,
+                )
+                bot.answer_callback_query(call.id, 'Ответ отправлен.' if accepted else 'Ответ уже был отправлен.')
+                return
+            bot.answer_callback_query(call.id, 'Неизвестное действие.', show_alert=True)
+        except Exception:
+            LOG.exception('Voice attempt callback failed')
+            try:
+                bot.answer_callback_query(call.id, 'Не удалось обработать голосовой ответ.', show_alert=True)
+            except Exception:
+                pass
+
     @bot.callback_query_handler(func=lambda call: str(call.data or '').startswith('sales:'))
     def on_sales_callback(call):
         chat_id = call.message.chat.id
@@ -1327,8 +1499,17 @@ def main():
                 reply_markup=_reply_markup(context_rows(chat_id)),
             )
             return
+        try:
+            session = store.current(chat_id)
+            is_active_training = (
+                current_context(chat_id) == CONTEXT_TRAINING
+                and session.get('phase') == 'active'
+            )
+        except Exception:
+            is_active_training = False
+        kind = 'voice_draft' if is_active_training else 'voice'
         receive_text(store, f'tg:{chat_id}:{message.message_id}', chat_id, chat_id,
-                     'voice', message.voice.file_id, send)
+                     kind, message.voice.file_id, send)
 
     try:
         LOG.info('Startup: polling allowed_updates=%s callback_handlers=%s',
