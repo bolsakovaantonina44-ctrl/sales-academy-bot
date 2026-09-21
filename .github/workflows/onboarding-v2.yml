@@ -26,7 +26,7 @@ jobs:
           python -m py_compile academy/onboarding.py academy/onboarding_progress.py academy/mobile_learning_runtime.py academy/ui_policy.py academy/ui_state.py academy_v2_launcher.py bot.py academy/store.py academy/reporting.py academy/report_text.py academy/pdf_report.py
       - name: Run Academy v2 tests
         run: |
-          pytest -q \
+          PYTHONPATH=. pytest -q \
             tests/test_onboarding_route.py \
             tests/test_onboarding_progress.py \
             tests/test_ui_policy.py \
