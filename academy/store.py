@@ -84,6 +84,23 @@ class Store:
             row = db.execute('SELECT payload FROM sessions WHERE id=? AND user_id=?', (session_id, user_id)).fetchone()
         return upgrade_session(json.loads(row[0])) if row else None
 
+    def update_session_fields(self, user_id, session_id, **fields):
+        """Persist small session metadata updates that are not tied to an inbox event."""
+        with self.db() as db:
+            row = db.execute(
+                'SELECT payload FROM sessions WHERE id=? AND user_id=?',
+                (int(session_id), int(user_id)),
+            ).fetchone()
+            if not row:
+                return False
+            session = upgrade_session(json.loads(row[0]))
+            session.update(fields)
+            db.execute(
+                'UPDATE sessions SET payload=? WHERE id=? AND user_id=?',
+                (dump(session), int(session_id), int(user_id)),
+            )
+            return True
+
     def attempts(self, user_id):
         with self.db() as db:
             return db.execute('SELECT COALESCE(SUM(counted),0) FROM sessions WHERE user_id=?', (user_id,)).fetchone()[0]
