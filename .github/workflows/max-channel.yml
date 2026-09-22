@@ -1,0 +1,28 @@
+name: MAX channel pilot
+
+on:
+  push:
+    branches:
+      - feature/max-channel-adapter
+  workflow_dispatch:
+
+jobs:
+  test-max-channel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install pytest
+      - name: Compile MAX transport
+        run: |
+          python -m py_compile academy/max_transport.py max_bot.py academy/engine.py academy/store.py
+      - name: Run MAX transport tests
+        run: |
+          PYTHONPATH=. pytest -q tests/test_max_transport.py tests/test_core.py tests/test_transport.py
