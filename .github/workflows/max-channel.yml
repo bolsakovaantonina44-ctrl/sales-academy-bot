@@ -25,4 +25,4 @@ jobs:
           python -m py_compile academy/max_transport.py max_bot.py academy/engine.py academy/store.py
       - name: Run MAX transport tests
         run: |
-          PYTHONPATH=. pytest -q tests/test_max_transport.py tests/test_store.py tests/test_engine.py
+          PYTHONPATH=. pytest -q tests/test_max_transport.py tests/test_core.py tests/test_transport.py
