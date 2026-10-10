@@ -30,6 +30,10 @@ class Store:
             CREATE INDEX IF NOT EXISTS ix_inbox_status ON inbox(status,id);
             CREATE INDEX IF NOT EXISTS ix_outbox_user ON outbox(user_id,sent,id);
             CREATE INDEX IF NOT EXISTS ix_sessions_user ON sessions(user_id,id);
+            CREATE TABLE IF NOT EXISTS paid_grants(
+                reference TEXT PRIMARY KEY, user_id INTEGER NOT NULL,
+                credits INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0,
+                expires_at TEXT NOT NULL, granted_by INTEGER NOT NULL);
             ''')
             columns = {row[1] for row in db.execute('PRAGMA table_info(inbox)')}
             if 'raw_text' not in columns:
@@ -118,6 +122,7 @@ class Store:
     def commit(self, event, session, replies, counted=False):
         """Session, usage, input acknowledgement and outgoing messages are one transaction."""
         with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
             sid = session['id']
             if sid is None:
                 old = db.execute('SELECT s.id,s.payload FROM sessions s JOIN users u ON u.current_id=s.id WHERE u.user_id=?', (event['user_id'],)).fetchone()
@@ -129,6 +134,16 @@ class Store:
                 sid = db.execute('INSERT INTO sessions(user_id,payload) VALUES(?,?)',
                                  (event['user_id'], '{}')).lastrowid
                 session['id'] = sid
+            previous = db.execute('SELECT counted FROM sessions WHERE id=? AND user_id=?',
+                                  (sid, event['user_id'])).fetchone()
+            if previous is None:
+                raise ValueError('Session owner mismatch')
+            if counted and not previous['counted'] and session.get('paid_training'):
+                grant = db.execute("SELECT reference FROM paid_grants WHERE user_id=? AND used<credits AND expires_at>? ORDER BY expires_at LIMIT 1",
+                                   (event['user_id'], self.now())).fetchone()
+                if grant is None:
+                    raise ValueError('Paid access expired or exhausted')
+                db.execute('UPDATE paid_grants SET used=used+1 WHERE reference=?', (grant[0],))
             db.execute('UPDATE sessions SET payload=?, counted=MAX(counted,?) WHERE id=? AND user_id=?',
                        (dump(session), int(counted), sid, event['user_id']))
             db.execute('INSERT INTO users(user_id,current_id) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET current_id=excluded.current_id',
@@ -182,3 +197,25 @@ class Store:
     def release_waiting(self, user_id):
         with self.db() as db:
             db.execute("UPDATE inbox SET status='queued' WHERE user_id=? AND status='waiting'", (user_id,))
+
+    @staticmethod
+    def now():
+        from datetime import datetime, timezone
+        return datetime.now(timezone.utc).isoformat()
+
+    def grant_paid(self, user, credits, days, reference, actor):
+        """Manual, auditable provisioning after payment; reference makes retries safe."""
+        from datetime import datetime, timezone, timedelta
+        if not 1 <= credits <= 1000 or not 1 <= days <= 366 or not 1 <= len(reference) <= 100:
+            raise ValueError('Invalid grant')
+        with self.db() as db:
+            previous = db.execute('SELECT user_id,credits,granted_by FROM paid_grants WHERE reference=?', (reference,)).fetchone()
+            if previous and tuple(previous) != (user, credits, actor):
+                raise ValueError('Payment reference already used')
+            return db.execute('INSERT OR IGNORE INTO paid_grants(reference,user_id,credits,expires_at,granted_by) VALUES(?,?,?,?,?)',
+                              (reference, user, credits, (datetime.now(timezone.utc) + timedelta(days=days)).isoformat(), actor)).rowcount == 1
+
+    def paid_remaining(self, user):
+        with self.db() as db:
+            return db.execute('SELECT COALESCE(SUM(credits-used),0) FROM paid_grants WHERE user_id=? AND expires_at>?',
+                              (user, self.now())).fetchone()[0]

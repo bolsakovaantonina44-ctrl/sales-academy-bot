@@ -5,6 +5,9 @@ from academy.engine import Engine, _display_customer
 
 
 class FakeStore:
+    def paid_remaining(self, user_id):
+        return 0
+
     def attempts(self, user_id):
         return 2
 

@@ -55,6 +55,10 @@ class Engine:
     def has_unlimited_training(self, user):
         return user in self.admin_ids or self.access_role(user) in {AKENSO, SUPERVISOR}
 
+    def can_start_training(self, user):
+        return (self.has_unlimited_training(user) or self.store.attempts(user) < self.limit
+                or self.store.paid_remaining(user) > 0)
+
     def setup_menu(self, user):
         return menu(public_access=not self.has_unlimited_training(user))
 
@@ -120,6 +124,7 @@ class Engine:
             used = min(attempts, self.limit)
             remaining = max(0, self.limit - attempts)
             usage = f'Бесплатные тренировки: использовано {used} из {self.limit}, осталось {remaining}.'
+            usage += f' Оплаченных тренировок осталось: {self.store.paid_remaining(user)}.'
 
         lines = ['МОИ ТРЕНИРОВКИ', usage, '']
         if not recent:
@@ -159,6 +164,13 @@ class Engine:
                 'Обычно тренировка занимает до 10 минут.\n\n' + self.setup_menu(s['employee']['id']))
 
     def handle(self, event):
+        budget = vars(self.ai).get('budget')
+        if budget:
+            with budget.scope(event['user_id'], self.store.current(event['user_id']).get('id')):
+                return self._handle(event)
+        return self._handle(event)
+
+    def _handle(self, event):
         user = event['user_id']
         text = event['text'].strip()
         cmd = normalize_command(text)
@@ -169,7 +181,17 @@ class Engine:
         replies, charge = [], False
         failed = self.store.failed(user)
 
-        if cmd in ('/name', 'изменить имя', 'сменить имя'):
+        if cmd.startswith('/grant '):
+            if user not in self.admin_ids:
+                replies = ['Выдача оплаченного доступа доступна только администратору.']
+            else:
+                try:
+                    _, target, credits, days, reference = text.split()
+                    granted = self.store.grant_paid(int(target), int(credits), int(days), reference, user)
+                    replies = ['Доступ выдан.' if granted else 'Этот платёж уже учтён.']
+                except ValueError:
+                    replies = ['Формат: /grant TELEGRAM_ID ЧИСЛО_ТРЕНИРОВОК ДНИ НОМЕР_ПЛАТЕЖА']
+        elif cmd in ('/name', 'изменить имя', 'сменить имя'):
             s['awaiting_employee_name'] = True
             replies = ['Напишите имя и фамилию сотрудника. Они будут указаны в отчётах.']
         elif s.get('awaiting_employee_name'):
@@ -219,7 +241,7 @@ class Engine:
             if cmd.startswith('/report '):
                 try:
                     sid = int(cmd.split()[1])
-                    target = next((x for x in self.store.recent(user) if x['id'] == sid), {})
+                    target = self.store.session_for_user(user, sid) or {}
                 except (ValueError, IndexError):
                     target = {}
             report = target.get('report')
@@ -310,9 +332,11 @@ class Engine:
         elif s['phase'] == 'ready' and cmd in ('начать тренировку', '/begin'):
             if not s.get('training_focus'):
                 replies = ['Сначала выберите, какое возражение тренируем.']
-            elif not self.has_unlimited_training(user) and self.store.attempts(user) >= self.limit:
+            elif not self.can_start_training(user):
                 replies = [f'Использованы все {self.limit} бесплатные тренировки. Сохранённые разборы доступны в «Мои тренировки».\n\n' + s['knowledge']['offer']]
             else:
+                s['paid_training'] = (not self.has_unlimited_training(user)
+                                      and self.store.attempts(user) >= self.limit)
                 s['card'] = s['card'] or self.ai.card({**s['fields'], 'situation': s['setup'],
                     'corporate_knowledge': {k: s['knowledge'][k] for k in ('product_knowledge', 'company_rules')}})
                 s['card'] = prepare_card(s['card'], s['fields']['difficulty'], s.get('training_focus'))

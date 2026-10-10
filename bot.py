@@ -107,6 +107,11 @@ def keyboard_rows(session, failed=False, admin=False):
 
 
 def receive_text(store, event_key, user_id, chat_id, kind, text, send):
+    if int(chat_id) <= 0 or int(chat_id) != int(user_id):
+        return False
+    if kind == 'text' and len(text) > 5000:
+        send(chat_id, 'Сообщение слишком длинное. Максимум 5000 символов.')
+        return False
     accepted = store.enqueue(event_key, user_id, chat_id, kind, text)
     if kind == 'text':
         cmd = normalize_command(text)
@@ -305,7 +310,17 @@ def worker(store, engine, ai, bot, stop, send):
                     raise ValueError('Audio too large')
                 audio = io.BytesIO(raw)
                 audio.name = 'voice.ogg'
+                usage_id = None
+                budget = getattr(ai, 'budget', None)
+                if budget:
+                    with budget.scope(event['user_id'], store.current(event['user_id']).get('id')):
+                        # Conservatively charge the permitted maximum when Telegram
+                        # metadata is absent. The API does not return audio duration.
+                        usage_id = budget.reserve('transcription', ai.transcribe_model,
+                                                  audio_seconds=180)
                 transcript = ai.client.audio.transcriptions.create(model=ai.transcribe_model, file=audio, language='ru')
+                if usage_id is not None:
+                    budget.finish(usage_id, getattr(transcript, 'usage', None))
                 text = transcript.text.strip()
                 if not text or len(text) > 5000:
                     raise ValueError('Transcription empty or too long')
@@ -350,12 +365,14 @@ def main():
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         raise RuntimeError('Another worker is using this database') from None
-    client = OpenAI(api_key=os.environ['OPENAI_API_KEY'], timeout=90, max_retries=1)
+    client = OpenAI(api_key=os.environ['OPENAI_API_KEY'], timeout=90, max_retries=0)
     model = os.getenv('OPENAI_MODEL', 'gpt-5.6-luna')
     ai = AI(client, model, os.getenv('OPENAI_TRANSCRIBE_MODEL', 'gpt-4o-mini-transcribe'),
             os.getenv('OPENAI_EVAL_MODEL', model))
     LOG.info('Startup: opening persistent database at %s', path)
     store = Store(path)
+    from academy.usage import UsageBudget
+    ai.budget = UsageBudget(store)
     store.recover()
     with store.db() as db:
         persisted = db.execute('SELECT COUNT(*), COALESCE(SUM(counted),0) FROM sessions').fetchone()
@@ -480,11 +497,7 @@ def main():
                 LOG.exception('Could not deliver sales lead admin=%s', admin_id)
 
     def _public_limit_reached(user_id):
-        return (
-            int(user_id) not in admins
-            and get_role(path, user_id) == PUBLIC
-            and store.attempts(user_id) >= engine.limit
-        )
+        return not engine.can_start_training(int(user_id))
 
     def _send_sales_gate(chat_id, with_history=False):
         if with_history:
@@ -879,6 +892,8 @@ def main():
     @bot.message_handler(content_types=['text'])
     def on_text(message):
         chat_id = message.chat.id
+        if chat_id <= 0:
+            return
         cmd = normalize_command(message.text or '')
         role = get_role(path, chat_id)
 
@@ -1320,6 +1335,12 @@ def main():
     @bot.message_handler(content_types=['voice'])
     def on_voice(message):
         chat_id = message.chat.id
+        if chat_id <= 0:
+            return
+        if (getattr(message.voice, 'duration', 0) > 180
+                or (getattr(message.voice, 'file_size', 0) or 0) > 10 * 1024 * 1024):
+            send(chat_id, 'Голосовое должно быть не длиннее 3 минут и не больше 10 МБ.')
+            return
         if has_company_access(path, chat_id) and current_context(chat_id) != CONTEXT_TRAINING:
             bot.send_message(
                 chat_id,
@@ -1333,7 +1354,7 @@ def main():
     try:
         LOG.info('Startup: polling allowed_updates=%s callback_handlers=%s',
                  TELEGRAM_ALLOWED_UPDATES, len(bot.callback_query_handlers))
-        bot.infinity_polling(skip_pending=True, timeout=30, long_polling_timeout=30,
+        bot.infinity_polling(skip_pending=False, timeout=30, long_polling_timeout=30,
                              allowed_updates=TELEGRAM_ALLOWED_UPDATES)
     finally:
         stop.set()

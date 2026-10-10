@@ -42,8 +42,14 @@ class AI:
         self.client, self.model = client, model
         self.eval_model = eval_model or model
         self.transcribe_model = transcribe_model
+        self.budget = None
 
     def request(self, name, instructions, payload, schema, model=None, max_output_tokens=6000):
+        request_id = None
+        if self.budget:
+            bound = len((BOUNDARY + instructions + json.dumps(payload, ensure_ascii=False)
+                         + json.dumps(schema)).encode('utf-8'))
+            request_id = self.budget.reserve(name, model or self.model, bound, max_output_tokens)
         response = self.client.responses.create(
             model=model or self.model, store=False,
             instructions=BOUNDARY + instructions,
@@ -51,6 +57,8 @@ class AI:
             text={'format': {'type': 'json_schema', 'name': name, 'schema': schema, 'strict': True}},
             max_output_tokens=max_output_tokens,
         )
+        if request_id is not None:
+            self.budget.finish(request_id, getattr(response, 'usage', None))
         if getattr(response, 'status', 'completed') != 'completed' or not response.output_text:
             raise EvaluationError('Incomplete model response', stage=name)
         try:
