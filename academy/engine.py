@@ -1,6 +1,7 @@
 """Application service. No transport imports or network side effects."""
 import copy
 import json
+import os
 from datetime import datetime, timezone
 from .domain import (session_empty, initial_state, normalize_command, is_finish_command,
                      render_report, partial_report, score_level, VERSION, RUBRIC_VERSION)
@@ -175,13 +176,20 @@ class Engine:
         text = event['text'].strip()
         cmd = normalize_command(text)
         s = self.store.current(user)
+        from .call_series import SeriesEngine
+        if SeriesEngine(self).handle(event, s):
+            return
         employee = s.setdefault('employee', {'id': user, 'name': ''})
         employee['id'] = user
         employee.setdefault('name', '')
         replies, charge = [], False
         failed = self.store.failed(user)
 
-        if cmd.startswith('/grant '):
+        if cmd == '/support':
+            contact = os.getenv('COMMERCIAL_CONTACT', '').strip()
+            replies = [(f'Поддержка: {contact}. Укажите номер тренировки или серии и опишите сбой.'
+                        if contact else 'Контакт поддержки пока не настроен. Обратитесь к владельцу бота.')]
+        elif cmd.startswith('/grant '):
             if user not in self.admin_ids:
                 replies = ['Выдача оплаченного доступа доступна только администратору.']
             else:
@@ -300,7 +308,7 @@ class Engine:
                 if user in self.admin_ids:
                     replies.append(f"__academy_pdf__:{s['id']}:supervisor")
                 replies.append('Разбор сохранён. PDF-файл отправлен автоматически. Доступны «Посмотреть разбор», «Скачать результат» и «Новая тренировка».')
-                if not self.has_unlimited_training(user) and self.store.attempts(user) >= self.limit:
+                if not self.can_start_training(user):
                     replies.append(f'Вы завершили доступные {self.limit} тренировки.\n\n' + s['knowledge']['offer'])
         elif s['phase'] == 'completed':
             replies = ['Эта тренировка завершена. Нажми «Новая тренировка» или «Посмотреть разбор».']
@@ -310,7 +318,11 @@ class Engine:
             replies = ['Тренировка уже запущена. Отправьте реплику клиенту.' if s['phase'] == 'active'
                        else 'Сначала выберите новую ситуацию для тренировки.']
         elif s['phase'] == 'active':
-            if s['state']['turns'] >= self.max_turns:
+            if s.get('access_basis') == 'corporate' and not self.has_unlimited_training(user):
+                replies = ['Корпоративный доступ отозван. Диалог сохранён; обратитесь к руководителю.']
+            elif s.get('paid_training') and not s.get('paid_consumed') and self.store.paid_remaining(user) <= 0:
+                replies = ['Оплаченный доступ истёк. Диалог сохранён; обратитесь в поддержку.']
+            elif s['state']['turns'] >= self.max_turns:
                 s['phase'] = 'closed'
                 replies = ['Достигнут лимит длины учебного разговора. Нажми «Завершить тренировку».']
             else:
@@ -337,6 +349,9 @@ class Engine:
             else:
                 s['paid_training'] = (not self.has_unlimited_training(user)
                                       and self.store.attempts(user) >= self.limit)
+                s['access_basis'] = ('admin' if user in self.admin_ids else
+                                     'corporate' if self.has_unlimited_training(user) else
+                                     'paid' if s['paid_training'] else 'trial')
                 s['card'] = s['card'] or self.ai.card({**s['fields'], 'situation': s['setup'],
                     'corporate_knowledge': {k: s['knowledge'][k] for k in ('product_knowledge', 'company_rules')}})
                 s['card'] = prepare_card(s['card'], s['fields']['difficulty'], s.get('training_focus'))

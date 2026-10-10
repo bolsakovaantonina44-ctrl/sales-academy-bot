@@ -165,7 +165,7 @@ def apply_behavior(session, plan, state):
     state['required_objection'] = ''
     state['required_objection_id'] = ''
     unseen = [b for b in barriers if b['id'] not in shown]
-    forced_focus = state['close'] == 'refusal' and bool(unseen)
+    forced_focus = state['close'] == 'refusal' and bool(unseen) and not session.get('series_active')
     if forced_focus:
         state['close'] = 'continue'
         state['agreement'] = old.get('agreement', '')
@@ -192,8 +192,12 @@ def apply_behavior(session, plan, state):
                                        or len(state['resolved']) < len(barriers)):
         state['close'] = 'continue'
         state['agreement'] = old.get('agreement', '')
+    if session.get('series_call_unreachable') and state['close'] == 'success':
+        state['close'] = 'qualified_refusal'
+        state['agreement'] = ''
+        state['ending_reason'] = 'Объективное ограничение клиента не может быть снято в этом звонке.'
     elapsed = 0
-    if session.get('started_at'):
+    if session.get('started_at') and not session.get('series_active'):
         try:
             elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(session['started_at'])).total_seconds()
         except (ValueError, TypeError):

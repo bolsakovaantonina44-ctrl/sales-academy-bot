@@ -84,6 +84,16 @@ def connect_telegram(telebot_module, token_sources):
 def keyboard_rows(session, failed=False, admin=False):
     """Training-only keyboard. Management actions intentionally live elsewhere."""
     phase = session['phase']
+    from academy.call_series import wizard_rows
+    draft_rows = wizard_rows(session)
+    if draft_rows is not None:
+        return draft_rows
+    if session.get('series_active'):
+        if failed:
+            return [['Повторить обработку'], ['/series_abort']]
+        if phase == 'completed':
+            return [['Следующий звонок'], ['/series_abort']]
+        return [['Завершить звонок'], ['/series_abort']]
     if failed:
         return [['Повторить обработку', 'Пропустить эту реплику'], ['Завершить тренировку']]
     if phase == 'active':
@@ -106,13 +116,16 @@ def keyboard_rows(session, failed=False, admin=False):
     return [['Мои тренировки']]
 
 
-def receive_text(store, event_key, user_id, chat_id, kind, text, send):
+def receive_text(store, event_key, user_id, chat_id, kind, text, send, voice_seconds=None):
     if int(chat_id) <= 0 or int(chat_id) != int(user_id):
         return False
     if kind == 'text' and len(text) > 5000:
         send(chat_id, 'Сообщение слишком длинное. Максимум 5000 символов.')
         return False
     accepted = store.enqueue(event_key, user_id, chat_id, kind, text)
+    if accepted and kind == 'voice' and voice_seconds is not None:
+        with store.db() as db:
+            db.execute('UPDATE inbox SET voice_seconds=? WHERE event_key=?', (voice_seconds, event_key))
     if kind == 'text':
         cmd = normalize_command(text)
         if is_finish_command(text) and not accepted:
@@ -317,7 +330,7 @@ def worker(store, engine, ai, bot, stop, send):
                         # Conservatively charge the permitted maximum when Telegram
                         # metadata is absent. The API does not return audio duration.
                         usage_id = budget.reserve('transcription', ai.transcribe_model,
-                                                  audio_seconds=180)
+                                                  audio_seconds=event.get('voice_seconds') or 180)
                 transcript = ai.client.audio.transcriptions.create(model=ai.transcribe_model, file=audio, language='ru')
                 if usage_id is not None:
                     budget.finish(usage_id, getattr(transcript, 'usage', None))
@@ -330,7 +343,7 @@ def worker(store, engine, ai, bot, stop, send):
             if not _handle_lpr_gate(store, event):
                 engine.handle(event)
             completed = store.current(event['user_id'])
-            if previous_phase != 'completed' and completed.get('phase') == 'completed':
+            if previous_phase != 'completed' and completed.get('phase') == 'completed' and not completed.get('series_id'):
                 queue_training_reports(store, event['user_id'], completed, engine.admin_ids)
         except Exception as exc:
             log_failure(event, store.current(event['user_id']), locals().get('stage', 'transport'), exc)
@@ -426,15 +439,10 @@ def main():
     def _individual_markup():
         markup = telebot.types.InlineKeyboardMarkup(row_width=1)
         plan_10 = f'10 тренировок — {commercial_cta.INDIVIDUAL_10_PRICE:,} ₽'.replace(',', ' ')
-        plan_month = f'Безлимит на 30 дней — {commercial_cta.INDIVIDUAL_MONTH_PRICE:,} ₽'.replace(',', ' ')
         url_10 = commercial_cta.payment_url('10')
-        url_month = commercial_cta.payment_url('month')
         markup.add(telebot.types.InlineKeyboardButton(
             plan_10, url=url_10) if url_10 else telebot.types.InlineKeyboardButton(
             plan_10, callback_data='sales:plan:10'))
-        markup.add(telebot.types.InlineKeyboardButton(
-            plan_month, url=url_month) if url_month else telebot.types.InlineKeyboardButton(
-            plan_month, callback_data='sales:plan:month'))
         markup.add(telebot.types.InlineKeyboardButton('← Назад', callback_data='sales:back'))
         return markup
 
@@ -524,7 +532,7 @@ def main():
             phase = None
         if context == CONTEXT_TRAINING:
             rows = keyboard_rows(session or {'phase': 'setup'}, bool(store.failed(user_id)), False)
-            if role in {AKENSO, SUPERVISOR} and phase not in ('active', 'closed'):
+            if role in {AKENSO, SUPERVISOR} and phase not in ('active', 'closed') and not (session or {}).get('series_active'):
                 rows.append(['К Академии'])
             return rows
         return rows_for_context(role, context, phase=phase, is_admin=is_admin)
@@ -892,9 +900,17 @@ def main():
     @bot.message_handler(content_types=['text'])
     def on_text(message):
         chat_id = message.chat.id
+        cmd = normalize_command(message.text or '')
         if chat_id <= 0:
             return
-        cmd = normalize_command(message.text or '')
+        active_series = store.open_series(chat_id)
+        if (active_series and active_series['status'] == 'active'
+                or store.current(chat_id).get('series_setup')
+                or cmd.startswith(('/series', '/grant')) or cmd in ('серия звонков', 'следующий звонок', 'завершить звонок')):
+            set_context(chat_id, CONTEXT_TRAINING)
+            receive_text(store, f'tg:{chat_id}:{message.message_id}', chat_id, chat_id,
+                         'text', message.text or '', send)
+            return
         role = get_role(path, chat_id)
 
         funnel_state = commercial_cta.company_state(path, chat_id)
@@ -927,7 +943,9 @@ def main():
             return
 
         if _public_limit_reached(chat_id):
-            if cmd in ('start', '/start', '/new', 'новая тренировка', 'начать тренировку', '/begin'):
+            if (cmd in ('/new', 'новая тренировка') or
+                    cmd in ('start', '/start', 'начать тренировку', '/begin')
+                    and store.current(chat_id)['phase'] not in ('active', 'closed')):
                 _send_sales_gate(chat_id)
                 return
             if cmd in ('мои тренировки', '/history'):
@@ -1077,6 +1095,9 @@ def main():
                 return
             if action == 'plan':
                 plan = parts[2]
+                if plan != '10':
+                    bot.answer_callback_query(call.id, 'Сейчас доступен пакет 10 тренировок.', show_alert=True)
+                    return
                 lead_id = commercial_cta.record_individual_interest(
                     path, chat_id, plan, _telegram_profile(call.from_user)
                 )
@@ -1093,8 +1114,7 @@ def main():
                     chat_id,
                     f'Вы выбрали тариф: {label}.\n\n'
                     'Заявка на подключение отправлена. Специалист Академии свяжется с вами '
-                    'по Telegram. После подключения платёжной ссылки эта кнопка будет вести '
-                    'сразу на оплату.',
+                    'по Telegram для оплаты и выдачи доступа.',
                 )
                 return
             if action == 'toggle':
@@ -1341,6 +1361,16 @@ def main():
                 or (getattr(message.voice, 'file_size', 0) or 0) > 10 * 1024 * 1024):
             send(chat_id, 'Голосовое должно быть не длиннее 3 минут и не больше 10 МБ.')
             return
+        current = store.current(chat_id)
+        if current['phase'] in ('completed', 'closed') and not current.get('series_setup'):
+            send(chat_id, 'Разговор завершён. Используйте кнопки для разбора или новой тренировки.')
+            return
+        if not engine.can_start_training(chat_id) and current['phase'] != 'active' and not current.get('series_setup'):
+            _send_sales_gate(chat_id)
+            return
+        active_series = store.open_series(chat_id)
+        if active_series and active_series['status'] == 'active':
+            set_context(chat_id, CONTEXT_TRAINING)
         if has_company_access(path, chat_id) and current_context(chat_id) != CONTEXT_TRAINING:
             bot.send_message(
                 chat_id,
@@ -1349,7 +1379,8 @@ def main():
             )
             return
         receive_text(store, f'tg:{chat_id}:{message.message_id}', chat_id, chat_id,
-                     'voice', message.voice.file_id, send)
+                     'voice', message.voice.file_id, send,
+                     voice_seconds=max(1, min(180, getattr(message.voice, 'duration', 180))))
 
     try:
         LOG.info('Startup: polling allowed_updates=%s callback_handlers=%s',

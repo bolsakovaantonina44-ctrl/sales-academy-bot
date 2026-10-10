@@ -34,11 +34,27 @@ class Store:
                 reference TEXT PRIMARY KEY, user_id INTEGER NOT NULL,
                 credits INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0,
                 expires_at TEXT NOT NULL, granted_by INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS call_series(
+                id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL,
+                assigned_by INTEGER, status TEXT NOT NULL, payload TEXT NOT NULL);
+            CREATE UNIQUE INDEX IF NOT EXISTS ix_one_open_series ON call_series(user_id)
+                WHERE status IN ('assigned','active');
+            CREATE TABLE IF NOT EXISTS series_calls(
+                series_id INTEGER NOT NULL, ordinal INTEGER NOT NULL,
+                session_id INTEGER NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL,
+                PRIMARY KEY(series_id,ordinal));
             ''')
             columns = {row[1] for row in db.execute('PRAGMA table_info(inbox)')}
             if 'raw_text' not in columns:
                 db.execute('ALTER TABLE inbox ADD COLUMN raw_text TEXT')
                 db.execute('UPDATE inbox SET raw_text=text')
+            if 'received_at' not in columns:
+                db.execute('ALTER TABLE inbox ADD COLUMN received_at REAL')
+            if 'voice_seconds' not in columns:
+                db.execute('ALTER TABLE inbox ADD COLUMN voice_seconds INTEGER')
+            out_columns = {row[1] for row in db.execute('PRAGMA table_info(outbox)')}
+            if 'session_id' not in out_columns:
+                db.execute('ALTER TABLE outbox ADD COLUMN session_id INTEGER')
 
     @contextmanager
     def db(self):
@@ -55,6 +71,11 @@ class Store:
         # No state commit occurred for these events. The model call may repeat, not the turn.
         with self.db() as db:
             db.execute("UPDATE inbox SET status='queued' WHERE status IN ('working','waiting')")
+            for row in db.execute("SELECT * FROM call_series WHERE status='active'").fetchall():
+                value = json.loads(row['payload'])
+                value.setdefault('interruptions', []).append(dict(kind='technical_restart', at=self.now()))
+                value['timing_uncertain'] = True
+                db.execute('UPDATE call_series SET payload=? WHERE id=?', (dump(value), row['id']))
 
     def enqueue(self, event_key, user_id, chat_id, kind, text):
         with self.db() as db:
@@ -67,8 +88,9 @@ class Store:
                 ).fetchall()
                 if any(is_finish_command(row['text']) for row in pending):
                     return False
-            return db.execute('INSERT OR IGNORE INTO inbox(event_key,user_id,chat_id,kind,text,raw_text) VALUES(?,?,?,?,?,?)',
-                              (event_key, user_id, chat_id, kind, text, text)).rowcount == 1
+            import time
+            return db.execute('INSERT OR IGNORE INTO inbox(event_key,user_id,chat_id,kind,text,raw_text,received_at) VALUES(?,?,?,?,?,?,?)',
+                              (event_key, user_id, chat_id, kind, text, text, time.time())).rowcount == 1
 
     def claim(self):
         with self.db() as db:
@@ -119,7 +141,7 @@ class Store:
         with self.db() as db:
             db.execute("UPDATE inbox SET kind='text',text=? WHERE id=?", (text, event_id))
 
-    def commit(self, event, session, replies, counted=False):
+    def commit(self, event, session, replies, counted=False, series=None, call_result=None):
         """Session, usage, input acknowledgement and outgoing messages are one transaction."""
         with self.db() as db:
             db.execute('BEGIN IMMEDIATE')
@@ -144,6 +166,7 @@ class Store:
                 if grant is None:
                     raise ValueError('Paid access expired or exhausted')
                 db.execute('UPDATE paid_grants SET used=used+1 WHERE reference=?', (grant[0],))
+                session['paid_consumed'] = True
             db.execute('UPDATE sessions SET payload=?, counted=MAX(counted,?) WHERE id=? AND user_id=?',
                        (dump(session), int(counted), sid, event['user_id']))
             db.execute('INSERT INTO users(user_id,current_id) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET current_id=excluded.current_id',
@@ -155,8 +178,32 @@ class Store:
                 db.execute("UPDATE inbox SET status='discarded' WHERE user_id=? AND status='failed'", (event['user_id'],))
             for reply in replies:
                 for part in chunks(reply):
-                    db.execute('INSERT INTO outbox(user_id,chat_id,body) VALUES(?,?,?)',
-                               (event['user_id'], event['chat_id'], part))
+                    db.execute('INSERT INTO outbox(user_id,chat_id,body,session_id) VALUES(?,?,?,?)',
+                               (event['user_id'], event['chat_id'], part, sid))
+            if series is not None:
+                stored = db.execute('SELECT status FROM call_series WHERE id=? AND user_id=?',
+                                    (series['id'], event['user_id'])).fetchone()
+                if stored is None:
+                    raise ValueError('Series owner mismatch')
+                if stored['status'] == 'assigned' and series['status'] == 'active' and series.get('credits_required'):
+                    credits = series['credits_required']
+                    grants = db.execute('SELECT reference,credits-used remaining FROM paid_grants WHERE user_id=? AND expires_at>? ORDER BY expires_at',
+                                        (event['user_id'], self.now())).fetchall()
+                    if sum(g['remaining'] for g in grants) < credits:
+                        raise ValueError('Paid credits expired or insufficient for series')
+                    for grant in grants:
+                        used = min(credits, grant['remaining'])
+                        db.execute('UPDATE paid_grants SET used=used+? WHERE reference=?', (used, grant['reference']))
+                        credits -= used
+                        if not credits:
+                            break
+                    series['credits_reserved'] = series['credits_required']
+                db.execute('UPDATE call_series SET status=?,payload=? WHERE id=? AND user_id=?',
+                           (series['status'], dump(series), series['id'], event['user_id']))
+            if call_result is not None:
+                db.execute('INSERT INTO series_calls(series_id,ordinal,session_id,status,payload) VALUES(?,?,?,?,?) '
+                           'ON CONFLICT(series_id,ordinal) DO UPDATE SET status=excluded.status,payload=excluded.payload',
+                           (series['id'], session['series_index'], sid, call_result['status'], dump(call_result)))
 
     def fail(self, event, kind):
         report_failure = (is_finish_command(event['text']) or
@@ -168,10 +215,17 @@ class Store:
         if event.get('attempts', 1) >= 2:
             message = ('Эту реплику не удалось обработать повторно. Она сохранена. '
                        'Нажми «Пропустить эту реплику» или «Завершить тренировку» — разбор будет по доступному разговору.')
+        series = self.open_series(event['user_id'])
+        if series and series['status'] == 'active':
+            message = ('Технический сбой: исходная реплика и сценарий сохранены. /retry — повторить её обработку. '
+                       'Новый звонок и пересдача не создаются.' if event.get('attempts', 1) < 2 else
+                       'Повторная обработка не удалась. Диалог сохранён; обратитесь в поддержку. '
+                       '/series_abort — завершить серию с прерыванием. Сбой учитывается отдельно.')
         with self.db() as db:
             db.execute("UPDATE inbox SET status='failed',error_kind=? WHERE id=?", (kind, event['id']))
             db.execute('INSERT INTO outbox(user_id,chat_id,body) VALUES(?,?,?)',
                        (event['user_id'], event['chat_id'], message))
+        self.series_technical(event['user_id'], 'technical_' + kind, event['id'])
 
     def discard_failed(self, user_id):
         with self.db() as db:
@@ -187,12 +241,28 @@ class Store:
 
     def sent(self, message_id):
         with self.db() as db:
+            row = db.execute('SELECT * FROM outbox WHERE id=? AND sent=0', (message_id,)).fetchone()
+            if row and row['session_id']:
+                saved = db.execute('SELECT payload FROM sessions WHERE id=?', (row['session_id'],)).fetchone()
+                if saved:
+                    s = json.loads(saved[0])
+                    if (s.get('series_active') and s.get('phase') == 'active' and s.get('history')
+                            and s['history'][-1]['role'] == 'assistant'
+                            and s['history'][-1]['content'] == row['body']):
+                        import time
+                        s['last_delivered_at'] = time.time()
+                        db.execute('UPDATE sessions SET payload=? WHERE id=?', (dump(s), row['session_id']))
+                    elif s.get('series_active') and s.get('phase') == 'completed' and row['body'].startswith('Результат звонка сохранён'):
+                        import time
+                        s['next_call_delivered_at'] = time.time()
+                        db.execute('UPDATE sessions SET payload=? WHERE id=?', (dump(s), row['session_id']))
             db.execute('UPDATE outbox SET sent=1 WHERE id=?', (message_id,))
 
     def defer(self, event):
         with self.db() as db:
             # A temporarily unavailable chat must not starve other users.
             db.execute("UPDATE inbox SET status='waiting' WHERE id=?", (event['id'],))
+        self.series_technical(event['user_id'], 'technical_delivery', event['id'])
 
     def release_waiting(self, user_id):
         with self.db() as db:
@@ -219,3 +289,49 @@ class Store:
         with self.db() as db:
             return db.execute('SELECT COALESCE(SUM(credits-used),0) FROM paid_grants WHERE user_id=? AND expires_at>?',
                               (user, self.now())).fetchone()[0]
+
+    def create_series(self, user, payload, assigned_by=None):
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            status = 'assigned'
+            ident = db.execute('INSERT INTO call_series(user_id,assigned_by,status,payload) VALUES(?,?,?,?)',
+                               (user, assigned_by, status, '{}')).lastrowid
+            payload.update(id=ident, user_id=user, assigned_by=assigned_by, status=status)
+            db.execute('UPDATE call_series SET payload=? WHERE id=?', (dump(payload), ident))
+            return payload
+
+    def open_series(self, user):
+        with self.db() as db:
+            row = db.execute("SELECT payload FROM call_series WHERE user_id=? AND status IN ('assigned','active') ORDER BY id DESC LIMIT 1", (user,)).fetchone()
+            return json.loads(row[0]) if row else None
+
+    def get_series(self, ident):
+        with self.db() as db:
+            row = db.execute('SELECT payload FROM call_series WHERE id=?', (ident,)).fetchone()
+            return json.loads(row[0]) if row else None
+
+    def recent_series(self, user):
+        with self.db() as db:
+            return [json.loads(r[0]) for r in db.execute('SELECT payload FROM call_series WHERE user_id=? ORDER BY id DESC LIMIT 10', (user,))]
+
+    def series_results(self, ident):
+        with self.db() as db:
+            return [json.loads(r[0]) for r in db.execute('SELECT payload FROM series_calls WHERE series_id=? ORDER BY ordinal', (ident,))]
+
+    def checkpoint_series_call(self, series, session, reason):
+        """Persist the actual dialogue BEFORE asking the evaluator; restart can resume it."""
+        with self.db() as db:
+            db.execute('INSERT OR IGNORE INTO series_calls(series_id,ordinal,session_id,status,payload) VALUES(?,?,?,?,?)',
+                       (series['id'], session['series_index'], session['id'], 'pending',
+                        dump(dict(status='pending', session=session, reason=reason))))
+
+    def series_technical(self, user, kind, event_id):
+        with self.db() as db:
+            row = db.execute("SELECT id,payload FROM call_series WHERE user_id=? AND status='active'", (user,)).fetchone()
+            if row:
+                value = json.loads(row['payload'])
+                record = dict(kind=kind, event_id=event_id)
+                if record not in value.setdefault('interruptions', []):
+                    value['interruptions'].append(record)
+                value['timing_uncertain'] = True
+                db.execute('UPDATE call_series SET payload=? WHERE id=?', (dump(value), row['id']))

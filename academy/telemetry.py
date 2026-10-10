@@ -69,6 +69,13 @@ def summary_text(path=None):
             except sqlite3.OperationalError:
                 voices = 0
             try:
+                usage = db.execute('SELECT SUM(input_tokens) inp,SUM(output_tokens) out,SUM(COALESCE(charged_usd,reserved_usd)) usd,SUM(reserved_usd IS NULL) unpriced FROM ai_usage').fetchone()
+                usage_line = (f"Токены: вход {usage['inp'] or 0}, выход {usage['out'] or 0}. "
+                    + ('Стоимость неполная: тарифы не настроены.' if usage['unpriced'] else
+                       f"Стоимость/резерв по настроенным тарифам: ${usage['usd'] or 0:.4f}."))
+            except sqlite3.OperationalError:
+                usage_line = 'Учёт токенов и стоимости ещё не включён.'
+            try:
                 current_active = 0
                 for row in db.execute("SELECT payload FROM sessions"):
                     payload = row[0] or "{}"
@@ -95,5 +102,5 @@ def summary_text(path=None):
         f"• AI-вызовов на завершённую тренировку: {calls_per_completed:.1f}",
         f"• По моделям: {model_line}",
         "",
-        "Токены и точная стоимость пока не считаются: сейчас фиксируются вызовы, модель и длительность без текста диалогов.",
+        usage_line,
     ])

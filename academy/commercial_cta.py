@@ -94,8 +94,7 @@ def individual_text():
     return (
         'ПРОДОЛЖИТЬ ДЛЯ СЕБЯ\n\n'
         'Выберите вариант доступа:\n\n'
-        f'• 10 тренировок — {INDIVIDUAL_10_PRICE:,} ₽\n'
-        f'• Безлимит на 30 дней — {INDIVIDUAL_MONTH_PRICE:,} ₽\n\n'
+        f'• 10 тренировок — {INDIVIDUAL_10_PRICE:,} ₽\n\n'
         'В доступ входят AI-тренировки, разбор каждого диалога, оценка навыков '
         'и сохранение истории прогресса.'
     ).replace(',', ' ')
@@ -362,9 +361,16 @@ def _queue_existing_completed_users(store):
                 (AKENSO, SUPERVISOR),
             )
         }
+        paid_users = {row[0] for row in db.execute(
+            'SELECT DISTINCT user_id FROM paid_grants WHERE credits>used AND expires_at>?', (store.now(),))}
+        series_users = {row[0] for row in db.execute(
+            "SELECT user_id FROM call_series WHERE status IN ('assigned','active')")}
+        continuing_paid = {row[0] for row in db.execute(
+            "SELECT u.user_id FROM users u JOIN sessions s ON u.current_id=s.id "
+            "WHERE json_extract(s.payload,'$.paid_consumed')=1 AND json_extract(s.payload,'$.phase') IN ('active','closed')")}
         users = [row[0] for row in db.execute('SELECT DISTINCT user_id FROM sessions')]
         for user_id in users:
-            if user_id in admins or user_id in corporate_users:
+            if user_id in admins or user_id in corporate_users or user_id in paid_users | series_users | continuing_paid:
                 continue
             rows = db.execute(
                 'SELECT counted,payload FROM sessions WHERE user_id=? ORDER BY id',

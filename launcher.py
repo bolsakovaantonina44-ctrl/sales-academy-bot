@@ -437,6 +437,9 @@ def _patched_message_handler(self, *args, **kwargs):
         @functools.wraps(handler)
         def wrapped(message):
             try:
+                series = Store(_db_path()).open_series(message.chat.id)
+                if series and series['status'] == 'active' or Store(_db_path()).current(message.chat.id).get('series_setup'):
+                    return handler(message)
                 if _handle_admin_text(self, message):
                     return None
             except Exception:

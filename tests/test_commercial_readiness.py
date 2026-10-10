@@ -1,5 +1,7 @@
 import tempfile
 import unittest
+import json
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 from academy.store import Store
@@ -7,6 +9,7 @@ from academy.engine import Engine
 from academy.usage import UsageBudget, BudgetExceeded
 from ops.backup import snapshot, verify
 from test_core import FakeAI
+from academy.domain import session_empty
 
 
 class CommercialReadinessTests(unittest.TestCase):
@@ -75,3 +78,35 @@ class CommercialReadinessTests(unittest.TestCase):
                 budget.reserve('turn', 'fake', 10000, 20000)
         self.assertEqual(budget.summary()['input_tokens'], 100)
         self.assertAlmostEqual(budget.summary()['usd'], .0005)
+
+    def test_unpriced_and_partial_prices_fail_closed_with_usd_limit(self):
+        budget = UsageBudget(self.store, daily_usd=1, prices={'fake': {'input_per_million': 1}})
+        with budget.scope(10), self.assertRaises(BudgetExceeded):
+            budget.reserve('turn', 'fake', 1000, 2000)
+        with self.assertRaises(ValueError):
+            UsageBudget(self.store, daily_usd=float('nan'))
+
+    def test_legacy_database_upgrade_preserves_users_results_and_pending_queues(self):
+        legacy = Path(self.temp.name) / 'legacy'
+        s = session_empty()
+        s.update(id=1, phase='completed', report='Сохранённый старый разбор',
+                 employee=dict(id=10, name='Старый Пользователь'))
+        with sqlite3.connect(legacy) as db:
+            db.executescript('''
+                CREATE TABLE users(user_id INTEGER PRIMARY KEY,current_id INTEGER);
+                CREATE TABLE sessions(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,payload TEXT NOT NULL,counted INTEGER NOT NULL DEFAULT 0);
+                CREATE TABLE inbox(id INTEGER PRIMARY KEY AUTOINCREMENT,event_key TEXT UNIQUE NOT NULL,user_id INTEGER NOT NULL,chat_id INTEGER NOT NULL,kind TEXT NOT NULL,text TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'queued',attempts INTEGER NOT NULL DEFAULT 0,error_kind TEXT,retry_of INTEGER);
+                CREATE TABLE outbox(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,chat_id INTEGER NOT NULL,body TEXT NOT NULL,sent INTEGER NOT NULL DEFAULT 0);
+            ''')
+            db.execute('INSERT INTO sessions VALUES(1,10,?,1)', (json.dumps(s, ensure_ascii=False),))
+            db.execute('INSERT INTO users VALUES(10,1)')
+            db.execute("INSERT INTO inbox(event_key,user_id,chat_id,kind,text) VALUES('legacy-voice',10,10,'voice','old-file-id')")
+            db.execute("INSERT INTO outbox(user_id,chat_id,body) VALUES(10,10,'Старый ожидающий ответ')")
+        upgraded = Store(legacy)
+        self.assertEqual(upgraded.current(10), s)
+        self.assertEqual(upgraded.attempts(10), 1)
+        self.assertIsNone(upgraded.session_for_user(11, 1))
+        pending = upgraded.claim()
+        self.assertEqual(pending['raw_text'], 'old-file-id')
+        self.assertEqual(upgraded.outgoing(10)[0]['body'], 'Старый ожидающий ответ')
+        self.assertEqual(upgraded.paid_remaining(10), 0)

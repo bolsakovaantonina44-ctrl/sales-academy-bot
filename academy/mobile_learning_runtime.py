@@ -51,6 +51,7 @@ def _home_markup(user_id):
     markup = telebot.types.InlineKeyboardMarkup(row_width=1)
     markup.add(telebot.types.InlineKeyboardButton("▶️ Продолжить маршрут", callback_data="academyv2:continue"))
     markup.add(telebot.types.InlineKeyboardButton("🎭 Тренажёр / практика", callback_data="academyv2:training"))
+    markup.add(telebot.types.InlineKeyboardButton("📞 Серия звонков", callback_data="academyv2:series"))
     markup.add(telebot.types.InlineKeyboardButton("📚 База знаний", callback_data="academyv2:modules"))
     if p["completed"] >= p["total"]:
         markup.add(telebot.types.InlineKeyboardButton("📝 Проверка знаний", callback_data="learn:home:assessment"))
@@ -228,6 +229,10 @@ def _post_learning_answer(bot, call):
 def _handle_text(bot, message):
     text = (getattr(message, "text", None) or "").strip().lower().replace("ё", "е")
     chat_id = message.chat.id
+    from .store import Store
+    series = Store(_db_path()).open_series(chat_id)
+    if series and series['status'] == 'active' or Store(_db_path()).current(chat_id).get('series_setup'):
+        return False
     if text not in {"база знаний", "продолжить обучение", "мой прогресс", "к академии"}:
         return False
     if not has_company_access(_db_path(), chat_id):
@@ -245,6 +250,15 @@ def _handle_text(bot, message):
 
 
 def _handle_callback(bot, call):
+    from .store import Store
+    if not getattr(call, 'message', None):
+        return False
+    if call.message.chat.id <= 0:
+        return True
+    series = Store(_db_path()).open_series(call.message.chat.id)
+    if series and series['status'] == 'active':
+        bot.answer_callback_query(call.id, 'Серия продолжается. Разбор и навигация доступны после её завершения.', show_alert=True)
+        return True
     data = str(getattr(call, "data", "") or "")
     if not data.startswith("academyv2:"):
         return False
@@ -263,6 +277,13 @@ def _handle_callback(bot, call):
         elif action == "complete": _complete(bot, chat_id, parts[2], int(parts[3]))
         elif action == "continue": _continue(bot, chat_id)
         elif action == "progress": _send_progress(bot, chat_id)
+        elif action == "series":
+            if _BOT_ON_TEXT_HANDLER:
+                _BOT_ON_TEXT_HANDLER(SimpleNamespace(chat=SimpleNamespace(id=chat_id),
+                    text='/series', message_id=int(time.time() * 1000)))
+            else:
+                from .call_series import HELP
+                bot.send_message(chat_id, HELP)
         elif action == "training": _open_training(bot, chat_id, exam=False)
         elif action == "exam": _open_training(bot, chat_id, exam=True)
         elif action == "pause":

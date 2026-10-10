@@ -152,7 +152,7 @@ def validate_card(card):
                     current_supplier='', supplier_attitude='', price_sensitivity=''))
     card.setdefault('refusal_condition', 'Менеджер продолжает давление после явного отказа или игнорирует ключевое ограничение.')
     validate(card, CARD_SCHEMA)
-    if not 1 <= len(card['facts']) <= 12 or not 1 <= len(card['barriers']) <= 3:
+    if not 1 <= len(card['facts']) <= 12 or not 0 <= len(card['barriers']) <= 3:
         raise ValueError('Card size invalid')
     for field in ('facts', 'barriers'):
         ids = [v['id'] for v in card[field]]
