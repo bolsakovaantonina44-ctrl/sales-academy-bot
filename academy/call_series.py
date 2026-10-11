@@ -227,7 +227,8 @@ def build_manifest(settings, seed=None):
             barriers=[] if not objection else [dict(id='series_objection', text=objection,
                 resolved_when=('Менеджер выяснил причину и предложил релевантный проверяемый вариант с согласия клиента.'
                                if overcome else 'В текущем звонке не может быть устранено; не соглашаться ради завершения игры.'))],
-            success={'next_step': 'meeting', 'purchase': 'order', 'proposal': 'quote'}.get(goal, goal),
+            success={'next_step': 'meeting', 'purchase': 'order', 'proposal': 'quote',
+                     'free_demo': 'meeting', 'custom_goal': 'meeting'}.get(goal, goal),
             success_condition=goal_criterion + ('' if overcome else ' Цель сделки в этом звонке недостижима; корректный отказ не снижает навыки автоматически.'),
             hidden_motive=reason)
         validate_card(card)
