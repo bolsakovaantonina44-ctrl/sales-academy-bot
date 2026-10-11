@@ -37,9 +37,11 @@ GOALS = {
     'proposal': ('Согласовать предложение', 'Клиент подтвердил требования к релевантному предложению и согласовал его обсуждение; просьба общего прайса недостаточна.'),
     'samples': ('Согласовать образцы', 'Согласованы нужные образцы, получатель и порядок передачи.'),
     'referral': ('Получить контакт ЛПР', 'Клиент согласовал передачу контакта ЛПР или соединение; имя без способа связи недостаточно.'),
+    'free_demo': ('Согласовать бесплатное тестирование', 'Клиент явно согласился на бесплатный тестовый доступ и согласовал конкретное действие: получение ссылки, подключение доступа или дату начала. Просто интерес или просьба прислать информацию недостаточны.'),
+    'custom_goal': ('Своя цель', 'Критерий успешного звонка задан в настройках серии.'),
 }
 OUTCOMES = {'meeting': 'Встреча', 'next_step': 'Согласованный следующий шаг', 'purchase': 'Покупка',
-            'proposal': 'Предложение с обсуждением', 'samples': 'Образцы', 'referral': 'Контакт ЛПР', 'refusal': 'Отказ',
+            'proposal': 'Предложение с обсуждением', 'samples': 'Образцы', 'referral': 'Контакт ЛПР', 'free_demo': 'Бесплатное тестирование', 'custom_goal': 'Своя цель', 'refusal': 'Отказ',
             'no_agreement': 'Без договорённости', 'unavailable': 'Не проверено'}
 DIFFICULTIES = {'easy': 'лёгкая', 'medium': 'средняя', 'hard': 'высокая'}
 REASONS = {'employee_finish': 'менеджер завершил звонок', 'natural_end': 'клиент завершил разговор',
@@ -98,7 +100,7 @@ def wizard_prompt(draft):
     if step != 'confirm':
         return prompts[step]
     lines = [f"СЕРИЯ: {data['count']} звонков", f"Продукт: {data['product']}", f"Клиент: {data['customer']}",
-             'Цели: ' + ', '.join(GOALS[g][0] for g in data['goals']),
+             'Цели: ' + ', '.join((data.get('custom_goal_label', GOALS[g][0]) if g == 'custom_goal' else GOALS[g][0]) for g in data['goals']),
              f"Заинтересованных без возражений: {data['interested_percent']}%. Максимальная сложность: {DIFFICULTIES[data['difficulty']]}.",
              'Возражения и относительные частоты:']
     for key, weight in data['objections'].items():
@@ -123,7 +125,7 @@ def config(value):
     if not isinstance(value, dict):
         raise ValueError('Настройки должны содержать поля серии')
     value = copy.deepcopy(value)
-    allowed = {'count', 'product', 'customer', 'goals', 'objections', 'interested_percent',
+    allowed = {'custom_goal_label', 'custom_goal_criterion', 'count', 'product', 'customer', 'goals', 'objections', 'interested_percent',
                'difficulty', 'custom', 'unreachable_percent', 'response_gap_seconds'}
     if set(value) - allowed:
         raise ValueError('Неизвестные поля настроек')
@@ -134,8 +136,12 @@ def config(value):
             raise ValueError('Укажите продукт и роль клиента (2–300 символов)')
     value.setdefault('goals', ['next_step'])
     if (not isinstance(value['goals'], list) or not value['goals']
-            or any(not isinstance(g, str) or g not in GOALS for g in value['goals']) or len(value['goals']) > 6):
+            or any(not isinstance(g, str) or g not in GOALS for g in value['goals']) or len(value['goals']) > len(GOALS)):
         raise ValueError('Допустимые цели: ' + ', '.join(GOALS))
+    if 'custom_goal' in value['goals']:
+        for field in ('custom_goal_label', 'custom_goal_criterion'):
+            if not isinstance(value.get(field), str) or not 5 <= len(value[field].strip()) <= 300:
+                raise ValueError('Укажите собственную цель и критерий успеха (5–300 символов)')
     value.setdefault('custom', [])
     if not isinstance(value['custom'], list) or len(value['custom']) > 14:
         raise ValueError('До 14 собственных ситуаций')
@@ -204,6 +210,8 @@ def build_manifest(settings, seed=None):
         context = f'Учебная компания {i+1}: {contexts[i % len(contexts)]}. {reason}'
         if not overcome:
             reason += ' Обязательное внутреннее ограничение запрещает согласование покупки и нового шага сейчас.'
+        goal_label = cfg['custom_goal_label'] if goal == 'custom_goal' else GOALS[goal][0]
+        goal_criterion = cfg['custom_goal_criterion'] if goal == 'custom_goal' else GOALS[goal][1]
         card = dict(identity=dict(name=names[i % len(names)], job_title=cfg['customer'],
                                  company=f'Учебная компания {i+1}', purchasing_role=cfg['customer']),
             background=dict(situation=context, need=f'Проверить пригодность решения для задачи: {contexts[i % len(contexts)]}.',
@@ -220,11 +228,11 @@ def build_manifest(settings, seed=None):
                 resolved_when=('Менеджер выяснил причину и предложил релевантный проверяемый вариант с согласия клиента.'
                                if overcome else 'В текущем звонке не может быть устранено; не соглашаться ради завершения игры.'))],
             success={'next_step': 'meeting', 'purchase': 'order', 'proposal': 'quote'}.get(goal, goal),
-            success_condition=GOALS[goal][1] + ('' if overcome else ' Цель сделки в этом звонке недостижима; корректный отказ не снижает навыки автоматически.'),
+            success_condition=goal_criterion + ('' if overcome else ' Цель сделки в этом звонке недостижима; корректный отказ не снижает навыки автоматически.'),
             hidden_motive=reason)
         validate_card(card)
         calls.append(dict(ordinal=i+1, objection=key, label=label, reason=reason,
-                          overcome=overcome, difficulty=difficulty, goal=goal, card=card))
+                          overcome=overcome, difficulty=difficulty, goal=goal, goal_label=goal_label, card=card))
     return cfg, calls
 
 
@@ -239,7 +247,7 @@ def new_call(series, employee):
              history=[dict(role='assistant', content=call['card']['opening'])],
              response_times=[], last_prompt_at=time.time())
     s['fields'].update(product=series['config']['product'], customer=series['config']['customer'],
-                       goal=GOALS[call['goal']][0], difficulty=call['difficulty'])
+                       goal=call.get('goal_label', call.get('goal_label', GOALS[call['goal']][0])), difficulty=call['difficulty'])
     s['versions']['scenario'] = VERSION
     return s
 
