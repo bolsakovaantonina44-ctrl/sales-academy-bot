@@ -297,8 +297,10 @@ def _wizard_prompt(draft):
         "goals": (
             "Какой результат звонка считать успешным?\n\n"
             "Можно выбрать одну или несколько целей — номера через запятую, например: 1, 2.\n\n"
-            + _goal_lines()
+            + _goal_lines() + "\n✏️ Своя цель — написать свою цель и критерий успеха"
         ),
+        "custom_goal_label": "Напишите собственную цель звонка (5–300 символов). Например: договориться о бесплатном тестировании.",
+        "custom_goal_criterion": "Как понять, что цель достигнута? Укажите наблюдаемое согласие клиента и следующий шаг (5–300 символов).",
         "objections": (
             "Какие типовые ситуации должны встречаться?\n\n"
             "Введите номера через запятую, например: 1, 4, 8. Если хотите все — нажмите «Все типовые».\n"
@@ -343,7 +345,7 @@ def _wizard_prompt(draft):
         f"Звонков: {data['count']}",
         f"Продукт: {data['product']}",
         f"Клиент: {data['customer']}",
-        "Цели: " + ", ".join(call_series.GOALS[g][0] for g in data["goals"]),
+        "Цели: " + ", ".join((data.get("custom_goal_label", call_series.GOALS[g][0]) if g == "custom_goal" else call_series.GOALS[g][0]) for g in data["goals"]),
         f"Максимальная сложность: {call_series.DIFFICULTIES[data['difficulty']]}",
         "",
         "Ситуации:",
@@ -370,7 +372,7 @@ def _wizard_rows(session):
 
     rows = {
         "count": [["10", "20", "30"]],
-        "goals": [["1", "2", "3"], ["4", "5", "6"]],
+        "goals": [["1", "2", "3"], ["4", "5", "6"], ["7", "✏️ Своя цель"]],
         "objections": [["Все типовые"]],
         "interested_percent": [["10", "20", "30", "50"]],
         "difficulty": [["Лёгкая", "Средняя", "Высокая"]],
@@ -523,10 +525,27 @@ def _patched_wizard(self, event, s):
             draft["step"] = "customer" if step == "product" else "goals"
 
         elif step == "goals":
+            if cmd in ("✏️ своя цель", "своя цель", "8"):
+                data["goals"] = ["custom_goal"]
+                draft["step"] = "custom_goal_label"
+                self.store.commit(event, s, [_wizard_prompt(draft)])
+                return True
             ids = [int(value.strip()) for value in text.split(",")]
             if not ids or any(not 1 <= value <= len(call_series.GOALS) for value in ids):
-                raise ValueError("Выберите номера целей 1–6 через запятую.")
+                raise ValueError("Выберите номера целей из списка через запятую.")
             data["goals"] = list(dict.fromkeys(list(call_series.GOALS)[value - 1] for value in ids))
+            draft["step"] = "custom_goal_label" if "custom_goal" in data["goals"] else "objections"
+
+        elif step == "custom_goal_label":
+            if not 5 <= len(text) <= 300:
+                raise ValueError("Введите цель длиной 5–300 символов.")
+            data["custom_goal_label"] = text
+            draft["step"] = "custom_goal_criterion"
+
+        elif step == "custom_goal_criterion":
+            if not 5 <= len(text) <= 300:
+                raise ValueError("Введите критерий успеха длиной 5–300 символов.")
+            data["custom_goal_criterion"] = text
             draft["step"] = "objections"
 
         elif step == "objections":
