@@ -247,7 +247,7 @@ def new_call(series, employee):
              history=[dict(role='assistant', content=call['card']['opening'])],
              response_times=[], last_prompt_at=time.time())
     s['fields'].update(product=series['config']['product'], customer=series['config']['customer'],
-                       goal=call.get('goal_label', call.get('goal_label', GOALS[call['goal']][0])), difficulty=call['difficulty'])
+                       goal=call.get('goal_label', GOALS[call['goal']][0]), difficulty=call['difficulty'])
     s['versions']['scenario'] = VERSION
     return s
 
