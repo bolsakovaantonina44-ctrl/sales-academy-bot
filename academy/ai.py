@@ -184,7 +184,8 @@ reason — короткое внутреннее обоснование, не и
             if explicit:
                 first = (card['identity'].get('name') or '').strip().split()[0]
                 return (first + '.') if first else 'Да, слушаю.'
-            return 'Да, слушаю.'
+            # Planner may retain the previous name intent for a new turn. Do not
+            # override the actual dialogue with a repeated generic greeting.
         allowed = [f for f in card['facts'] if f['id'] in state['revealed']]
         out = self.request('client_reply', '''Ты только клиент в живом B2B-разговоре.
 Говори естественно и коротко: обычно одна короткая реплика, максимум 2 предложения и 320 символов.
