@@ -36,4 +36,9 @@ import telemetry_launcher  # noqa: E402
 
 
 if __name__ == "__main__":
-    telemetry_launcher.launcher.bot.main()
+    from centaro.supervisor import start
+    stop_centaro = start()
+    try:
+        telemetry_launcher.launcher.bot.main()
+    finally:
+        stop_centaro()
