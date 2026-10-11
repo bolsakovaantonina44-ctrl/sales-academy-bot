@@ -13,6 +13,7 @@ from academy.centaro_role_reports_runtime import install as install_centaro_role
 from academy.centaro_rop_runtime import install as install_centaro_rop
 from academy.centaro_crm_calibration_runtime import install as install_centaro_crm_calibration
 from academy.centaro_calibrated_forecast_runtime import install as install_centaro_calibrated_forecast
+from academy.centaro_brand_runtime import install as install_centaro_brand
 
 install_mobile_learning()
 install_series_ux()
@@ -21,6 +22,7 @@ install_centaro_role_reports()
 install_centaro_rop()
 install_centaro_crm_calibration()
 install_centaro_calibrated_forecast()
+install_centaro_brand()
 
 # mobile_learning_runtime wraps callback handlers, but the legacy bot registers
 # handlers with narrow prefixes (team:, learn:, adm:, acc:). Without widening those
