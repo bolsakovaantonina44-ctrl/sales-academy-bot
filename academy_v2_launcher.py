@@ -6,9 +6,11 @@ inline learning buttons remain active alongside legacy admin/learning handlers.
 """
 import telebot
 
-from academy.mobile_learning_runtime import install
+from academy.mobile_learning_runtime import install as install_mobile_learning
+from academy.series_ux_runtime import install as install_series_ux
 
-install()
+install_mobile_learning()
+install_series_ux()
 
 # mobile_learning_runtime wraps callback handlers, but the legacy bot registers
 # handlers with narrow prefixes (team:, learn:, adm:, acc:). Without widening those
