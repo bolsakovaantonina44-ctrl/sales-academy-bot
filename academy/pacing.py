@@ -188,6 +188,12 @@ def apply_behavior(session, plan, state):
             state['suppress_issue_repeat'] = False
             shown.add(b['id'])
     state['presented_barriers'] = sorted(shown)
+    # A greeting or request for a name is not a reason to hang up. Keep real
+    # pressure/refusal and later qualified endings available to the planner.
+    if (state['close'] in ('refusal', 'qualified_refusal') and substantive < 3
+            and action != 'pressure' and plan['intent'] in ('name', 'role', 'need', 'other')):
+        state['close'] = 'continue'
+        state['ending_reason'] = ''
     if state['close'] == 'success' and (state['required_objection'] or len(shown) < len(barriers)
                                        or len(state['resolved']) < len(barriers)):
         state['close'] = 'continue'

@@ -227,6 +227,7 @@ def _persist_management_context(store, target, before_id, flow_code, target_pct)
     current["target_conversion_pct"] = float(target_pct)
     current["assessment_level"] = _sample_label(current.get("config", {}).get("count"))
     _apply_flow_to_manifest(current, flow_code)
+    current["manifest_hash"] = call_series.manifest_hash(current["manifest"])
     with store.db() as db:
         db.execute(
             "UPDATE call_series SET payload=? WHERE id=? AND user_id=?",

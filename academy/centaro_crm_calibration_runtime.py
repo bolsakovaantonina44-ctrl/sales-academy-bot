@@ -10,6 +10,7 @@ This deliberately starts without a CRM connector. A future Bitrix connector can 
 the same crm_fact payload automatically without changing report semantics.
 """
 import json
+from academy.domain import normalize_command
 
 import telebot
 
@@ -242,6 +243,10 @@ def _training_conversion(store, series):
 
 def _patched_handle(self, event, s):
     user = int(event["user_id"])
+    active = self.store.open_series(user)
+    if ((active and active["status"] == "active") or s.get("series_setup")
+            or normalize_command(event.get('text') or '') in ('посмотреть итог серии', 'скачать отчет серии')):
+        return _ORIGINAL_HANDLE(self, event, s)
     text = str(event.get("text") or "").strip()
     pending = _find_pending(self.store, user)
     if not pending:

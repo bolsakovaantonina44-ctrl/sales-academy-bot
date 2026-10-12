@@ -1,6 +1,7 @@
 import json
 import logging
 import copy
+import re
 from .domain import (FIELDS_SCHEMA, CARD_SCHEMA, PLAN_SCHEMA, REPLY_SCHEMA, EVAL_SCHEMA, EVAL_MODEL_SCHEMA, attach_evidence,
                      validate, validate_card, reduce_plan, check_evaluation, EvaluationError, obj, arr, S, B, I, choice, SKILLS)
 from .knowledge import profile
@@ -86,7 +87,7 @@ refusal — отказ, no_agreement — нет договорённости. go
 При positive outcome или goal_achieved обязательны ссылки на предложение manager И подтверждение
 client. Нельзя путать предложение и согласие. Не выводи покупку из вежливости или интереса.
 Если результат неоднозначен — no_agreement, goal_achieved=false. reason объясняет выбранный результат.''',
-            dict(goal=goal, criterion=GOALS[goal][1],
+            dict(goal=goal, criterion=session.get("series_goal_criterion") or GOALS[goal][1],
                  history=[dict(message_id=i+1, speaker='manager' if m['role'] == 'user' else 'client',
                                content=m['content']) for i, m in enumerate(session['history'])]),
             schema, self.eval_model, max_output_tokens=1200)
@@ -114,7 +115,7 @@ client. Нельзя путать предложение и согласие. Н
 действительно подтверждены действиями и явным согласием сторон по criterion.
 Не засчитывай интерес, вежливость или предложение менеджера как согласие клиента.
 Укажи конкретное несоответствие в issues; при неоднозначности положительного вывода passed=false.''',
-            dict(criterion=GOALS[goal][1], history=session['history'], result=result),
+            dict(criterion=session.get("series_goal_criterion") or GOALS[goal][1], history=session['history'], result=result),
             REVIEW_SCHEMA, self.eval_model, max_output_tokens=800)
         if not review['passed'] or review['issues']:
             raise EvaluationError('Series outcome failed independent review')
@@ -178,9 +179,9 @@ reason — короткое внутреннее обоснование, не и
     def reply(self, session, text, state):
         # Deliberately do not send hidden motives, unopened facts, planner reason or full card.
         card = session['card']
-        if state.get('last_intent') == 'name' and state.get('close') == 'continue':
+        if state.get('close') == 'continue':
             value = (text or '').lower().replace('ё', 'е')
-            explicit = any(marker in value for marker in ('как вас зовут', 'как к вам обращаться', 'ваше имя', 'представьтесь'))
+            explicit = bool(re.search(r'как (?:могу |можно )?(?:к вам )?обращаться|как вас зовут|ваше имя|представьтесь|а (?:вы|вас)\s*\?', value))
             if explicit:
                 first = (card['identity'].get('name') or '').strip().split()[0]
                 return (first + '.') if first else 'Да, слушаю.'
@@ -188,7 +189,7 @@ reason — короткое внутреннее обоснование, не и
             # override the actual dialogue with a repeated generic greeting.
         allowed = [f for f in card['facts'] if f['id'] in state['revealed']]
         out = self.request('client_reply', '''Ты только клиент в живом B2B-разговоре.
-Говори естественно и коротко: обычно одна короткая реплика, максимум 2 предложения и 320 символов.
+Говори естественно: обычно 1–3 предложения, до 500 символов. Дай законченный ответ, не обрывай мысль ради краткости.
 Не начинай ответ с пересказа слов менеджера. Не используй конструкции «Понял, вы...», «То есть вы...», «Как я понял...»,
 если только действительно не нужно уточнить противоречие. Не резюмируй презентацию менеджера своими словами.
 Отвечай из позиции клиента: реакция, сомнение, короткий факт, отказ, уточняющий вопрос или согласие.
@@ -199,6 +200,10 @@ allowed_facts — внутренняя справка, написанная фо
 Не говори канцеляритом: «сохранять понятный контроль», «при любом формате», «управленческие задачи», «является фактором риска».
 Никаких отчётных выводов, терминов методики или объяснений собственной стратегии.
 Сначала ответь на текущий вопрос. Имя и должность бери только из identity.
+Это имитация телефонного разговора. Не обсуждай ограничения Telegram-чата и не говори, что здесь нельзя получить ссылку.
+Если менеджер представился и спросил «а вас?» — назови своё имя.
+Не повторяй один отказ разными словами на каждый новый вопрос. Отвечай по существу, учитывая уже сказанное.
+active_barrier — сомнение для естественной реакции, а не фраза, которую нужно дословно дописать к ответу.
 Не обучай, не подсказывай вопросы, не оценивай. Не перечисляй все разрешённые факты.
 Не придумывай факты, цифры, сроки, полномочия, наличие и свойства товара.
 Используй только allowed_facts и ранее произнесённое клиентом. Неизвестное — «не знаю», «нужно уточнить».
@@ -237,10 +242,6 @@ active_barrier — только текущее допустимое сомнен
         if not set(out['used_fact_ids']) <= set(state['revealed']):
             raise ValueError('Reply uses hidden facts')
         reply = out['reply'].strip()
-        if state.get('required_objection'):
-            objection = state['required_objection']
-            # A scheduled objection must actually be spoken, not just recorded in state.
-            reply = reply + ' ' + objection if len(reply) + len(objection) < 500 else objection
         return reply
 
     def turn(self, session, text):
@@ -255,7 +256,7 @@ active_barrier — только текущее допустимое сомнен
                 stage = 'client_reply'
                 reply = self.reply(session, text, state)
                 previous = next((m['content'] for m in reversed(session['history']) if m['role'] == 'assistant'), '')
-                if reply == previous and plan.get('intent') != 'name':
+                if reply == previous:
                     raise EvaluationError('Repeated client reply')
                 return reply, state, plan
             except ValueError as exc:

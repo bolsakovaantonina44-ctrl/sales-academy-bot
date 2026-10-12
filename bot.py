@@ -94,6 +94,8 @@ def keyboard_rows(session, failed=False, admin=False):
         if phase == 'completed':
             return [['Следующий звонок'], ['/series_abort']]
         return [['Завершить звонок'], ['/series_abort']]
+    if session.get('series_id') and phase == 'completed':
+        return [['Посмотреть итог серии', 'Скачать отчёт серии'], ['Новая тренировка', 'Мои тренировки']]
     if failed:
         return [['Повторить обработку', 'Пропустить эту реплику'], ['Завершить тренировку']]
     if phase == 'active':
@@ -341,6 +343,7 @@ def worker(store, engine, ai, bot, stop, send):
                 event.update(kind='text', text=text)
                 stage = 'conversation'
             if not _handle_lpr_gate(store, event):
+                engine.series_progress = lambda user: deliver(store, user, send)
                 engine.handle(event)
             completed = store.current(event['user_id'])
             if previous_phase != 'completed' and completed.get('phase') == 'completed' and not completed.get('series_id'):
@@ -876,6 +879,10 @@ def main():
         learning_message(chat_id, text, markup, edit_message)
 
     def send(chat_id, text):
+        if str(text).startswith('__academy_series_pdf__:'):
+            from academy.series_report import deliver_series_pdf
+            deliver_series_pdf(bot, store, chat_id, text, admins)
+            return
         if str(text).startswith('__academy_pdf__:'):
             deliver_pdf(bot, store, chat_id, text, admins)
             return
@@ -906,7 +913,7 @@ def main():
         active_series = store.open_series(chat_id)
         if (active_series and active_series['status'] == 'active'
                 or store.current(chat_id).get('series_setup')
-                or cmd.startswith(('/series', '/grant')) or cmd in ('серия звонков', 'следующий звонок', 'завершить звонок')):
+                or cmd.startswith(('/series', '/grant')) or cmd in ('серия звонков', 'следующий звонок', 'завершить звонок', 'посмотреть итог серии', 'скачать отчет серии')):
             set_context(chat_id, CONTEXT_TRAINING)
             receive_text(store, f'tg:{chat_id}:{message.message_id}', chat_id, chat_id,
                          'text', message.text or '', send)

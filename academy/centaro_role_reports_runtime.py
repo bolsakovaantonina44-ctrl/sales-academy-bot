@@ -152,6 +152,7 @@ def _build_manifest(settings, seed=None):
         if actual not in EXTRA_GOALS:
             continue
         call["goal"] = actual
+        call["goal_label"] = call_series.GOALS[actual][0]
         call["card"]["success"] = "meeting"
         condition = call_series.GOALS[actual][1]
         if not call.get("overcome", True):
@@ -182,7 +183,7 @@ refusal/no_agreement. goal_achieved=true только если criterion вып�
 Если результат неоднозначен, используй no_agreement.""" + "\nКаталог: " + catalogue,
         {
             "goal": goal,
-            "criterion": goals[goal][1],
+            "criterion": (session.get("series_goal_criterion") or goals[goal][1]),
             "history": [
                 {
                     "message_id": index + 1,
@@ -221,7 +222,7 @@ refusal/no_agreement. goal_achieved=true только если criterion вып�
  goal_achieved подтверждены действиями менеджера и явным согласием клиента по criterion.
 Для showroom должно быть согласие на визит; для deal — переход к оформлению сделки.
 При неоднозначности положительного результата passed=false.""",
-        {"criterion": goals[goal][1], "history": session["history"], "result": result},
+        {"criterion": (session.get("series_goal_criterion") or goals[goal][1]), "history": session["history"], "result": result},
         obj(passed=B, issues=arr(S)),
         self.eval_model,
         max_output_tokens=800,

@@ -94,6 +94,7 @@ def _series_hub(bot, chat_id):
                 f"СЕРИЯ ЗВОНКОВ\n\nСерия №{current['id']} уже идёт: "
                 f"{count} звонков. Во время серии нет подсказок и промежуточного разбора."
             )
+            markup.add(telebot.types.InlineKeyboardButton('Продолжить серию', callback_data='academyv2:series:resume'))
         else:
             source = "назначена руководителем" if current["mode"] == "attestation" else "подготовлена вами"
             text = (
@@ -206,6 +207,10 @@ def _patched_mobile_callback(bot, call):
         return _ORIGINAL_MOBILE_CALLBACK(bot, call)
 
     chat_id = call.message.chat.id
+    if data == 'academyv2:series:resume':
+        _dispatch_text(chat_id, '/series_resume')
+        bot.answer_callback_query(call.id)
+        return True
     if data == "academyv2:series":
         _series_hub(bot, chat_id)
         bot.answer_callback_query(call.id)

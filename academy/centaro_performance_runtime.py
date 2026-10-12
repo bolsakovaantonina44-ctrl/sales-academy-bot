@@ -22,7 +22,7 @@ import telebot
 from academy import call_series
 from academy import series_ux_runtime as series_ux
 from academy.access import PUBLIC, get_role
-from academy.domain import SKILLS, chunks
+from academy.domain import SKILLS, chunks, normalize_command
 from academy.learning import progress_snapshot
 from academy.reporting import total_score
 
@@ -456,6 +456,10 @@ def _patched_finish(self, event, s, series, reason, interrupted=False):
 
 def _patched_handle(self, event, s):
     user = int(event["user_id"])
+    active = self.store.open_series(user)
+    if ((active and active["status"] == "active") or s.get("series_setup")
+            or normalize_command(event.get('text') or '') in ('посмотреть итог серии', 'скачать отчет серии')):
+        return _ORIGINAL_HANDLE(self, event, s)
     text = str(event.get("text") or "").strip()
     pending = _find_pending_for_actor(self.store, user)
     if not pending:
@@ -524,6 +528,7 @@ def _branded_series_hub(bot, chat_id):
                 f"CENTARO · СЕРИЯ ЗВОНКОВ\n\nСерия №{current['id']} уже идёт: {count} звонков. "
                 "Во время серии нет подсказок и промежуточного разбора."
             )
+            markup.add(telebot.types.InlineKeyboardButton('Продолжить серию', callback_data='academyv2:series:resume'))
         else:
             source = "назначена руководителем" if current["mode"] == "attestation" else "подготовлена вами"
             text = (

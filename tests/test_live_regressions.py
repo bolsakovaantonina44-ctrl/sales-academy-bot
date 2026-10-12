@@ -131,12 +131,12 @@ class LiveRegressions(unittest.TestCase):
         state2=apply_behavior(s2,p2,reduce_plan(s2['state'],p2,s2['card']))
         self.assertEqual(state2['revealed'],[])
 
-    def test_objection_is_spoken_and_hidden_information_not_given_to_writer(self):
+    def test_objection_context_is_given_to_writer_without_appending_a_disconnected_refusal(self):
         s=self.talk(); state=copy.deepcopy(s['state'])
         state.update(required_objection='Я подумаю.',focus_issue_id='comparable')
         ai=AI(None,'fake','fake');ai.request=Mock(return_value=dict(reply='Для входной зоны.',used_fact_ids=['need']))
         answer=ai.reply(s,'Какую задачу решаете?',state)
-        self.assertIn('Я подумаю.',answer)
+        self.assertEqual('Для входной зоны.', answer)
         payload=ai.request.call_args.args[2]
         self.assertEqual(payload['active_barrier'],'У других дешевле.')
         self.assertNotIn('card',payload)

@@ -241,6 +241,7 @@ def new_call(series, employee):
     call = series['manifest'][series['index']]
     s = session_empty()
     s.update(series_id=series['id'], series_index=call['ordinal'], series_active=True,
+             series_goal_criterion=(series['config'].get('custom_goal_criterion') if call['goal'] == 'custom_goal' else GOALS[call['goal']][1]),
              employee=employee, phase='active', card=copy.deepcopy(call['card']),
              series_call_unreachable=not call['overcome'],
              lpr_gate_passed=True, source='call_series', training_focus=None,
@@ -321,20 +322,20 @@ def report(series, results):
         s = r['session']
         call = series['manifest'][s['series_index']-1]
         score = total_score(s.get('report_data')) if r.get('assessment_status') == 'verified' else None
-        lines.append(f"Звонок {s['series_index']} · {call['label']} · сложность {DIFFICULTIES[call['difficulty']]} · цель: {GOALS[call['goal']][0]}\n"
+        lines.append(f"Звонок {s['series_index']} · {call['label']} · сложность {DIFFICULTIES[call['difficulty']]} · цель: {call.get('goal_label', GOALS[call['goal']][0])}\n"
                      f"Результат: {OUTCOMES.get(r.get('outcome'), 'Не проверено')}; качество: "
                      f"{score if score is not None else 'недоступно'}; {'прерван' if r['status'] == 'interrupted' else 'завершён'}.")
         lines.append(f"Завершение: {REASONS.get(r['reason'], r['reason'])}. " + r.get('outcome_reason', ''))
         for skill in (s.get('report_data') or {}).get('skills', []):
-            refs = ' / '.join(f"#{e['message_id']} {e['speaker']}: «{e['quote']}»" for e in skill.get('evidence', []))
+            refs = ' / '.join(f"#{e['message_id']} {'Менеджер' if e['speaker'] == 'manager' else 'Клиент'}: «{e['quote']}»" for e in skill.get('evidence', []))
             title = next(title for ident, title, _ in SKILLS if ident == skill['id'])
-            lines.append(f"{title}: {skill['score'] if skill['score'] is not None else 'N/A'} — {skill['reason']}" + (f'\n{refs}' if refs else ''))
+            lines.append(f"{title}: {skill['score'] if skill['score'] is not None else 'недостаточно данных'} — {skill['reason']}" + (f'\n{refs}' if refs else ''))
         for ref in r.get('outcome_evidence', []):
-            lines.append(f"Результат #{ref['message_id']} {ref['speaker']}: «{ref['quote']}»")
+            lines.append(f"Результат #{ref['message_id']} {'Менеджер' if ref['speaker'] == 'manager' else 'Клиент'}: «{ref['quote']}»")
     lines += ['Журнал прерываний: ' + ('; '.join(f"{INTERRUPTIONS.get(i['kind'], 'Технический сбой' if i['kind'].startswith('technical_') else i['kind'])}"
               + (f", звонок {i['call']}" if i.get('call') else '')
               + (f", {i['seconds']:.1f} сек" if i.get('seconds') else '') for i in interruptions) or 'нет'),
-              'Критерии целей: ' + '; '.join(f'{GOALS[g][0]}: {GOALS[g][1]}' for g in series['config']['goals']),
+              'Критерии целей: ' + '; '.join((series['config']['custom_goal_label'] + ': ' + series['config']['custom_goal_criterion']) if g == 'custom_goal' else f'{GOALS[g][0]}: {GOALS[g][1]}' for g in series['config']['goals']),
               'Состав и критерии сохранены до старта серии.']
     return '\n\n'.join(lines)
 
@@ -349,7 +350,7 @@ class SeriesEngine:
         series = self.store.open_series(user)
         if s.get('series_setup') and not series:
             return self.wizard(event, s)
-        if not series and not (cmd.startswith('/series') or cmd == 'серия звонков'):
+        if not series and not (cmd.startswith('/series') or cmd in ('серия звонков', 'посмотреть итог серии', 'скачать отчет серии')):
             return False
         replies = []
         if series and series['status'] == 'active':
@@ -363,7 +364,14 @@ class SeriesEngine:
             s['series_setup'] = dict(mode=mode, step='target' if mode == 'attestation' else 'count', data={'custom': []})
             self.store.commit(event, s, [wizard_prompt(s['series_setup'])])
             return True
-        if cmd.startswith('/series_report '):
+        if cmd in ('посмотреть итог серии', 'скачать отчет серии'):
+            value = self.store.get_series(s.get('series_id')) if s.get('series_id') else None
+            if not value or value['user_id'] != user or value['status'] not in ('completed', 'aborted'):
+                replies = ['Завершённая серия не найдена. /series_list — сохранённые серии.']
+            else:
+                from .series_report import summary, pdf_marker
+                replies = [pdf_marker(value['id'])] if cmd == 'скачать отчет серии' else [summary(value, self.store.series_results(value['id']))]
+        elif cmd.startswith('/series_report '):
             try:
                 value = self.store.get_series(int(text.split()[1]))
                 allowed = value and (value['user_id'] == user or user in self.engine.admin_ids
@@ -373,7 +381,8 @@ class SeriesEngine:
                 elif value['status'] in ('active', 'assigned'):
                     replies = ['Итог доступен после завершения серии.']
                 else:
-                    replies = [report(value, self.store.series_results(value['id']))]
+                    from .series_report import pdf_marker
+                    replies = [report(value, self.store.series_results(value['id'])), pdf_marker(value['id'])]
             except (ValueError, IndexError):
                 replies = ['Формат: /series_report НОМЕР']
         elif cmd == '/series_list':
@@ -534,6 +543,13 @@ class SeriesEngine:
 
     def finish(self, event, s, series, reason, interrupted=False):
         self.store.checkpoint_series_call(series, s, reason)
+        progress = getattr(self.engine, 'series_progress', None)
+        if progress:
+            try:
+                progress(event['user_id'])
+            except Exception:
+                # Delivery has its own durable retry; never discard the result.
+                pass
         s['phase'] = 'completed'
         if reason == 'technical_abort':
             s['report_status'] = 'technical_partial'
@@ -567,10 +583,11 @@ class SeriesEngine:
                 series['usage'] = budget.summary(series['id'])
             saved = [r for r in self.store.series_results(series['id'])
                      if r['session']['series_index'] != s['series_index']]
-            self.store.commit(event, s, [report(series, saved + [result])],
+            from .series_report import summary, pdf_marker
+            self.store.commit(event, s, [summary(series, saved + [result]), pdf_marker(series['id'])],
                               series=series, call_result=result)
         else:
-            self.store.commit(event, s, ['Результат звонка сохранён. Следующий звонок: /series_next. Разбор будет в конце серии.'],
+            self.store.commit(event, s, [f"Результат звонка сохранён. Завершено {s['series_index']}/{series['config']['count']}. Нажмите «Следующий звонок» или отправьте /series_next. Разбор будет в конце серии."],
                               series=series, call_result=result)
 
     def active(self, event, s, series):
@@ -585,6 +602,11 @@ class SeriesEngine:
             return
         if s['phase'] == 'active' and s['state']['close'] != 'continue':
             self.finish(event, s, series, 'natural_end')
+            # A next/resume command after a process interruption must both recover
+            # the saved call and continue, rather than consume the command.
+            if cmd in ('/series_next', 'следующий звонок', '/series_resume') and series['status'] == 'active':
+                resumed = dict(event, text='/series_next')
+                self.active(resumed, self.store.current(user), series)
             return
         failed = self.store.failed(user)
         if cmd == '/support':
@@ -608,7 +630,7 @@ class SeriesEngine:
                 event['discard_failed'] = True
                 self.finish(event, s, series, reason, True)
             return
-        if cmd in ('/series_next', 'следующий звонок') and s['phase'] == 'completed':
+        if cmd in ('/series_next', 'следующий звонок', '/series_resume', 'продолжить серию', 'дальше') and s['phase'] == 'completed':
             delivered = s.get('next_call_delivered_at')
             uncertain = series.pop('timing_uncertain', False)
             gap = max(0, (event.get('received_at') or time.time()) - delivered) if delivered and not uncertain else None
@@ -617,11 +639,12 @@ class SeriesEngine:
                 series['interruptions'].append(dict(kind='unexplained_between_call_gap', call=s['series_index'], seconds=gap))
             series['index'] += 1
             s = new_call(series, s['employee'])
+            s['versions'].update(model=self.ai.model, evaluator=self.ai.eval_model)
             self.store.commit(event, s, intro(series, s), series=series)
             return
-        if cmd in ('/start', '/series_begin'):
+        if cmd in ('/start', '/series_begin', '/series_resume', 'продолжить серию'):
             series['interruptions'].append(dict(kind='employee_reentry', call=s['series_index'], at=self.store.now()))
-            self.store.commit(event, s, ['Продолжается тот же звонок.' if s['phase'] == 'active' else 'Результат сохранён. /series_next — следующий звонок.'], series=series)
+            self.store.commit(event, s, [f"Серия №{series['id']} · звонок {s['series_index']}/{series['config']['count']}. " + ('Продолжается тот же звонок. Ответьте на последнюю реплику клиента.' if s['phase'] == 'active' else 'Результат сохранён. Нажмите «Следующий звонок» или /series_next.')], series=series)
             return
         if cmd.startswith('/') and not is_finish_command(text) or cmd in ('новая тренировка', 'посмотреть разбор', 'скачать результат', 'показать скрытый сценарий', 'обновить разбор', 'к академии', 'база знаний', 'аттестация', 'мой прогресс', 'пропустить эту реплику'):
             series['interruptions'].append(dict(kind='employee_navigation', call=s['series_index'], at=self.store.now()))

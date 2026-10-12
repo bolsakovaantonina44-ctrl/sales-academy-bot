@@ -81,12 +81,12 @@ class Store:
         with self.db() as db:
             # Telegram reply-keyboard taps have different message IDs. While a slow
             # evaluation is running, coalesce repeated finish taps into one event.
-            if kind == 'text' and is_finish_command(text):
+            if kind == 'text' and (is_finish_command(text) or normalize_command(text) == 'завершить звонок'):
                 pending = db.execute(
                     "SELECT text FROM inbox WHERE user_id=? AND status IN ('queued','working','waiting')",
                     (user_id,),
                 ).fetchall()
-                if any(is_finish_command(row['text']) for row in pending):
+                if any(is_finish_command(row['text']) or normalize_command(row['text']) == 'завершить звонок' for row in pending):
                     return False
             import time
             return db.execute('INSERT OR IGNORE INTO inbox(event_key,user_id,chat_id,kind,text,raw_text,received_at) VALUES(?,?,?,?,?,?,?)',
@@ -321,9 +321,13 @@ class Store:
     def checkpoint_series_call(self, series, session, reason):
         """Persist the actual dialogue BEFORE asking the evaluator; restart can resume it."""
         with self.db() as db:
-            db.execute('INSERT OR IGNORE INTO series_calls(series_id,ordinal,session_id,status,payload) VALUES(?,?,?,?,?)',
+            inserted = db.execute('INSERT OR IGNORE INTO series_calls(series_id,ordinal,session_id,status,payload) VALUES(?,?,?,?,?)',
                        (series['id'], session['series_index'], session['id'], 'pending',
-                        dump(dict(status='pending', session=session, reason=reason))))
+                        dump(dict(status='pending', session=session, reason=reason)))).rowcount
+            if inserted:
+                db.execute('INSERT INTO outbox(user_id,chat_id,body,session_id) VALUES(?,?,?,?)',
+                           (series['user_id'], series['user_id'],
+                            f"Звонок {session['series_index']}/{series['config']['count']} завершён. Сохраняю результат. Проверка может занять около минуты; после неё появится кнопка следующего звонка. Разбор — в конце серии.", session['id']))
 
     def series_technical(self, user, kind, event_id):
         with self.db() as db:
