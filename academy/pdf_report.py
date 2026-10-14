@@ -9,7 +9,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether, PageBreak
 from .domain import SKILLS, score_level
-from .reporting import total_score, supervisor_recommendation, recommended_training_cases
+from .reporting import total_score, supervisor_recommendation, recommended_training_cases, voice_self_correction_lines
 from .pacing import FOCUS_OBJECTIONS
 
 
@@ -106,6 +106,10 @@ def render_pdf(session, audience='employee'):
         if training_cases:
             story.append(p('Как использовать тренажёр дальше', heading))
             story += [p(f'{i}. Повторить тренировку: {case}') for i, case in enumerate(training_cases, 1)]
+        self_correction = voice_self_correction_lines(session)
+        if self_correction:
+            story.append(p('Самокоррекция', heading))
+            story += [p('• ' + item) for item in self_correction]
     else:
         verdict = supervisor_recommendation(data, session)
         story += [PageBreak(), p('Коротко для руководителя', title),
@@ -113,6 +117,11 @@ def render_pdf(session, audience='employee'):
                   p(verdict['trainability'])]
         story.append(p('На что обратить внимание', heading))
         story += [p('• ' + x) for x in verdict['focus']]
+
+        self_correction = voice_self_correction_lines(session)
+        if self_correction:
+            story.append(p('Самокоррекция', heading))
+            story += [p('• ' + item) for item in self_correction]
 
         if data.get('strengths'):
             story.append(p('Сильные стороны', heading))
