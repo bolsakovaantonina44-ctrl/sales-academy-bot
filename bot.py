@@ -29,6 +29,7 @@ from academy.ui_policy import (
 from academy import assessment
 from academy import admission
 from academy import commercial_cta
+from academy import consent
 
 LOG = logging.getLogger('academy')
 TELEGRAM_ALLOWED_UPDATES = ['message', 'callback_query']
@@ -904,11 +905,21 @@ def main():
     thread = threading.Thread(target=worker, args=(store, engine, ai, bot, stop, send), daemon=True)
     thread.start()
 
+    def _consent_blocked(chat_id, text):
+        blocked = consent.gate(path, chat_id, text)
+        if not blocked:
+            return False
+        reply, rows = blocked
+        bot.send_message(chat_id, reply, reply_markup=_reply_markup(rows))
+        return True
+
     @bot.message_handler(content_types=['text'])
     def on_text(message):
         chat_id = message.chat.id
         cmd = normalize_command(message.text or '')
         if chat_id <= 0:
+            return
+        if _consent_blocked(chat_id, message.text or ''):
             return
         active_series = store.open_series(chat_id)
         if (active_series and active_series['status'] == 'active'
@@ -1363,6 +1374,8 @@ def main():
     def on_voice(message):
         chat_id = message.chat.id
         if chat_id <= 0:
+            return
+        if _consent_blocked(chat_id, ''):
             return
         if (getattr(message.voice, 'duration', 0) > 180
                 or (getattr(message.voice, 'file_size', 0) or 0) > 10 * 1024 * 1024):

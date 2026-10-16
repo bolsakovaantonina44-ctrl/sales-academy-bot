@@ -42,6 +42,8 @@ def main():
                 create=Mock(return_value=SimpleNamespace(text='Какую задачу вы хотите решить?')))))
             engine = Engine(store, ai, admin_ids=[999])
             engine.series_progress = lambda user: deliver(store, user, send)
+            from academy import consent
+            consent.record(path, 10, 'accepted')
             set_role(path, 10, AKENSO)
             set_role(path, 12, SUPERVISOR)
             seq = 0

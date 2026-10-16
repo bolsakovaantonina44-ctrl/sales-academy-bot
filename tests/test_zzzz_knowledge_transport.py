@@ -42,6 +42,8 @@ class KnowledgeTransportTests(unittest.TestCase):
         self.stack.enter_context(patch.object(bot.threading, 'Thread'))
         bot.main()
         set_role(self.path, 10, AKENSO)
+        from academy import consent
+        consent.record(self.path, 10, 'accepted')
         self.update_id = 0
 
     def message(self, text, user_id=10):
