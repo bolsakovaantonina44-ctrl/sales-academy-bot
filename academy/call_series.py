@@ -344,6 +344,31 @@ class SeriesEngine:
     def __init__(self, engine):
         self.engine, self.store, self.ai = engine, engine.store, engine.ai
 
+    def usage_report(self, user, text):
+        if user not in self.engine.admin_ids:
+            return 'Расход ИИ доступен только администратору.'
+        parts = text.split()
+        try:
+            if len(parts) > 2:
+                raise ValueError
+            if len(parts) == 2:
+                ident = int(parts[1])
+            else:
+                with self.store.db() as db:
+                    row = db.execute('SELECT MAX(id) FROM call_series').fetchone()
+                ident = row[0]
+                if ident is None:
+                    return 'Серий пока нет.'
+        except ValueError:
+            return 'Формат: /series_usage или /series_usage НОМЕР_СЕРИИ'
+        series = self.store.get_series(ident)
+        if not series:
+            return 'Серия не найдена.'
+        from .usage import UsageBudget, format_series_usage
+        budget = vars(self.ai).get('budget') or UsageBudget(self.store)
+        saved = len(self.store.series_results(series['id']))
+        return format_series_usage(series, budget.series_breakdown(series['id']), saved)
+
     def handle(self, event, s):
         user, text = event['user_id'], event['text'].strip()
         cmd = normalize_command(text)
@@ -385,6 +410,8 @@ class SeriesEngine:
                     replies = [report(value, self.store.series_results(value['id'])), pdf_marker(value['id'])]
             except (ValueError, IndexError):
                 replies = ['Формат: /series_report НОМЕР']
+        elif cmd == '/series_usage' or cmd.startswith('/series_usage '):
+            replies = [self.usage_report(user, text)]
         elif cmd == '/series_list':
             replies = ['МОИ СЕРИИ\n' + '\n'.join(f"№{v['id']}: {v['config']['count']} звонков, {v['status']}" for v in self.store.recent_series(user))]
         elif cmd.startswith('/series_assign '):
