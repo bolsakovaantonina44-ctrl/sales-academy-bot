@@ -87,3 +87,28 @@ class SeriesChannelTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class FreeDemoCriterionTests(unittest.TestCase):
+    def test_outcome_judge_gets_demo_acceptance_rule(self):
+        sent = []
+
+        class Responses:
+            def create(self, **kwargs):
+                sent.append((kwargs['instructions'], json.loads(kwargs['input'])))
+                raise RuntimeError('stop after capture')
+
+        ai = AI(SimpleNamespace(responses=Responses()), 'm', 't')
+        session = {'history': [
+            {'role': 'user', 'content': 'Предлагаем подарить вам демо тренировку'},
+            {'role': 'assistant', 'content': 'Демо посмотреть можно. Пришлите, что входит в демо.'},
+            {'role': 'user', 'content': 'Пришлю ссылку. Перезвоню завтра в 2?'},
+            {'role': 'assistant', 'content': 'Хорошо, ориентируемся на два часа. Ссылку и описание демо жду сюда.'}]}
+        with self.assertRaises(RuntimeError):
+            ai.series_outcome(session, 'free_demo')
+        instructions, payload = sent[-1]
+        self.assertIn('посмотреть или попробовать бесплатное демо', payload['criterion'])
+        self.assertIn('получение ссылки на демо', payload['criterion'])
+        self.assertIn('только просит прислать информацию, КП или прайс', payload['criterion'])
+        self.assertIn('Для цели free_demo', instructions)
+        self.assertIn('Сомнение клиента не равно отказу', instructions)
