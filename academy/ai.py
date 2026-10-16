@@ -86,7 +86,9 @@ proposal — релевантное КП с обсуждением, samples — 
 refusal — отказ, no_agreement — нет договорённости. goal_achieved только если criterion выполнен.
 При positive outcome или goal_achieved обязательны ссылки на предложение manager И подтверждение
 client. Нельзя путать предложение и согласие. Не выводи покупку из вежливости или интереса.
-Если результат неоднозначен — no_agreement, goal_achieved=false. reason объясняет выбранный результат.''',
+Если результат неоднозначен — no_agreement, goal_achieved=false. reason объясняет выбранный результат.
+Для цели free_demo реплика клиента «демо посмотреть можно» или «попробуем» вместе с согласованным получением ссылки или временем
+следующего контакта — это согласие, даже с оговоркой «не считать результат доказанным». Сомнение клиента не равно отказу.''',
             dict(goal=goal, criterion=session.get("series_goal_criterion") or GOALS[goal][1],
                  history=[dict(message_id=i+1, speaker='manager' if m['role'] == 'user' else 'client',
                                content=m['content']) for i, m in enumerate(session['history'])]),
