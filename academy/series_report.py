@@ -13,7 +13,7 @@ def pdf_marker(ident):
 
 
 def summary(series, results):
-    from .call_series import GOALS, OUTCOMES
+    from .call_series import GOALS, OUTCOMES, channel_breakdown
     rows = [r for r in results if r['status'] != 'pending']
     valid = [r for r in rows if r.get('assessment_status') == 'verified'
              and (r['session'].get('report_data') or {}).get('simulation_valid')]
@@ -30,6 +30,7 @@ def summary(series, results):
              'Цель: ' + ', '.join(series['config'].get('custom_goal_label', GOALS[g][0]) if g == 'custom_goal' else GOALS[g][0] for g in series['config']['goals']),
              'Качество продажи: ' + (f'{sum(scores)/len(scores):.1f}/100 · {score_level(sum(scores)/len(scores))}.' if scores else 'недостаточно проверенных оценок.'),
              f'Учебная конверсия: {achieved}/{len(checked)} проверенных звонков' + (f' ({achieved/len(checked):.0%}).' if checked else ' — недостаточно данных.'),
+             *channel_breakdown(series, rows),
              f'Не проверено: {len(rows)-len(checked)}; не проведено: {planned-len(rows)}.',
              'Результаты: ' + ('; '.join(f'{OUTCOMES.get(k, "Не проверено")}: {v}' for k, v in Counter(r.get('outcome', 'unavailable') for r in rows).items()) or 'нет'),
              f"Завершено: {sum(r['status'] == 'completed' for r in rows)}; прервано: {sum(r['status'] == 'interrupted' for r in rows)}."]

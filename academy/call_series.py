@@ -44,6 +44,9 @@ OUTCOMES = {'meeting': 'Встреча', 'next_step': 'Согласованны�
             'proposal': 'Предложение с обсуждением', 'samples': 'Образцы', 'referral': 'Контакт ЛПР', 'free_demo': 'Бесплатное тестирование', 'custom_goal': 'Своя цель', 'refusal': 'Отказ',
             'no_agreement': 'Без договорённости', 'unavailable': 'Не проверено'}
 DIFFICULTIES = {'easy': 'лёгкая', 'medium': 'средняя', 'hard': 'высокая'}
+CHANNELS = {'call': 'Звонок', 'chat': 'Переписка'}
+CHAT_OPENINGS = {'easy': 'Здравствуйте. По какому вопросу?', 'medium': 'Здравствуйте. По какому вопросу?',
+                 'hard': 'Здравствуйте. Коротко, пожалуйста: что вы предлагаете?'}
 REASONS = {'employee_finish': 'менеджер завершил звонок', 'natural_end': 'клиент завершил разговор',
            'employee_abort': 'сотрудник прервал серию', 'technical_abort': 'серия завершена после технического сбоя'}
 INTERRUPTIONS = {'employee_reentry': 'повторный вход', 'employee_navigation': 'попытка выхода из режима',
@@ -126,7 +129,7 @@ def config(value):
         raise ValueError('Настройки должны содержать поля серии')
     value = copy.deepcopy(value)
     allowed = {'custom_goal_label', 'custom_goal_criterion', 'count', 'product', 'customer', 'goals', 'objections', 'interested_percent',
-               'difficulty', 'custom', 'unreachable_percent', 'response_gap_seconds'}
+               'difficulty', 'custom', 'unreachable_percent', 'response_gap_seconds', 'chat_percent'}
     if set(value) - allowed:
         raise ValueError('Неизвестные поля настроек')
     if type(value.get('count')) is not int or value['count'] not in (10, 20, 30):
@@ -159,7 +162,7 @@ def config(value):
     if (not isinstance(weights, dict) or not weights or set(weights) - known
             or any(type(w) is not int or not 1 <= w <= 100 for w in weights.values())):
         raise ValueError('Возражения: известный ID → целый относительный вес 1–100')
-    for key, default, low, high in [('interested_percent', 20, 5, 80),
+    for key, default, low, high in [('interested_percent', 20, 5, 80), ('chat_percent', 0, 0, 100),
                                    ('unreachable_percent', 20, 0, 100),
                                    ('response_gap_seconds', 300, 30, 3600)]:
         value.setdefault(key, default)
@@ -191,6 +194,9 @@ def build_manifest(settings, seed=None):
     rng.shuffle(schedule)
     blocked = set(rng.sample([i for i, k in enumerate(schedule) if k != 'interested'],
                              round(objection_count * cfg['unreachable_percent'] / 100)))
+    chats = round(n * cfg['chat_percent'] / 100)
+    # Sampled only when chats are requested, so call-only manifests keep their previous randomness.
+    chat_slots = set(rng.sample(range(n), chats)) if chats else set()
     calls = []
     contexts = ['новый проект', 'расширение текущей деятельности', 'проверка альтернатив',
                 'замена устаревшего решения', 'сезонная задача', 'резервный вариант']
@@ -220,7 +226,8 @@ def build_manifest(settings, seed=None):
                 supplier_attitude='', price_sensitivity=''),
             refusal_condition='Явное давление после отказа или игнорирование объективного ограничения.',
             role=cfg['customer'], segment='Учебный клиент', behavior_type='Заинтересован' if key == 'interested' else difficulty,
-            company_context=context, opening='Добрый день. Слушаю вас.' if difficulty != 'hard' else 'Добрый день. У меня мало времени. По какому вопросу?',
+            company_context=context, opening=(CHAT_OPENINGS[difficulty] if i in chat_slots else
+                'Добрый день. Слушаю вас.' if difficulty != 'hard' else 'Добрый день. У меня мало времени. По какому вопросу?'),
             facts=[dict(id='task', text=f'Текущая задача: {contexts[i % len(contexts)]}.', reveal_when='Уместный вопрос о текущей ситуации.'),
                    dict(id='cause', text=reason, reveal_when='Менеджер уточнил причину сомнения или ограничения.')],
             unknown=['Цена, характеристики и срок продукта продавца не известны без его подтверждённого предложения.', 'Точные суммы и даты бюджета не заданы.'],
@@ -233,7 +240,8 @@ def build_manifest(settings, seed=None):
             hidden_motive=reason)
         validate_card(card)
         calls.append(dict(ordinal=i+1, objection=key, label=label, reason=reason,
-                          overcome=overcome, difficulty=difficulty, goal=goal, goal_label=goal_label, card=card))
+                          overcome=overcome, difficulty=difficulty, goal=goal, goal_label=goal_label, card=card,
+                          channel='chat' if i in chat_slots else 'call'))
     return cfg, calls
 
 
@@ -245,6 +253,7 @@ def new_call(series, employee):
              employee=employee, phase='active', card=copy.deepcopy(call['card']),
              series_call_unreachable=not call['overcome'],
              lpr_gate_passed=True, source='call_series', training_focus=None,
+             series_channel=call.get('channel', 'call'),
              started_at=datetime.now(timezone.utc).isoformat(),
              history=[dict(role='assistant', content=call['card']['opening'])],
              response_times=[], last_prompt_at=time.time())
@@ -255,10 +264,42 @@ def new_call(series, employee):
 
 
 def intro(series, s):
-    return [f"Серия №{series['id']} · звонок {s['series_index']}/{series['config']['count']}\n"
+    chat = s.get('series_channel') == 'chat'
+    kind = 'переписка' if chat else 'звонок'
+    start = ('Формат: переписка в мессенджере. Вы поздоровались с клиентом, он ответил — продолжайте переписку. '
+             if chat else 'Начните разговор. ')
+    return [f"Серия №{series['id']} · {kind} {s['series_index']}/{series['config']['count']}\n"
             f"Клиент: {s['fields']['customer']} · {s['card']['identity']['company']}\n"
             f"Вы предлагаете: {s['fields']['product']}\nЦель: {s['fields']['goal']}\n"
-            'Начните разговор. Подсказок и разбора до конца серии нет.', s['card']['opening']]
+            + start + 'Подсказок и разбора до конца серии нет.', s['card']['opening']]
+
+
+def channel_mix(series):
+    manifest = series.get('manifest') or []
+    chats = sum(c.get('channel') == 'chat' for c in manifest)
+    return len(manifest) - chats, chats
+
+
+def channel_breakdown(series, results):
+    """Training conversion per channel; empty unless the series mixes calls and chats."""
+    calls, chats = channel_mix(series)
+    if not calls or not chats:
+        return []
+    manifest = series.get('manifest') or []
+    lines = []
+    for code in ('call', 'chat'):
+        rows = [r for r in results if r.get('status') != 'pending'
+                and 0 < r['session'].get('series_index', 0) <= len(manifest)
+                and manifest[r['session']['series_index'] - 1].get('channel', 'call') == code
+                and r.get('outcome_status') == 'verified'
+                # Same denominator as the series conversion in report().
+                and (r.get('assessment_status') == 'no_speech'
+                     or (r.get('assessment_status') == 'verified'
+                         and (r['session'].get('report_data') or {}).get('simulation_valid')))]
+        done = sum(bool(r.get('goal_achieved')) for r in rows)
+        rate = f' ({done / len(rows):.0%})' if rows else ''
+        lines.append(f"{'Звонки' if code == 'call' else 'Переписка'}: {done}/{len(rows)}{rate}")
+    return ['По формату: ' + '; '.join(lines) + '.']
 
 
 def report(series, results):
@@ -280,6 +321,7 @@ def report(series, results):
              f'События сотрудника: {employee}; технические события: {technical}; интервалы без установленной причины: {unknown}.',
              f"Учебная конверсия: {achieved}/{len(conversion)} проверенных звонков"
              + (f' ({achieved/len(conversion):.0%}).' if conversion else ' — недостаточно данных.'),
+             *channel_breakdown(series, rows),
              f"В знаменатель не включены: {len(rows)-len(conversion)} технически/семантически непроверенных; "
              f"не проведено: {series['config']['count']-len(rows)}.",
              'Цели и критерии зафиксированы до старта. Прерванный проверенный звонок остаётся в знаменателе.',

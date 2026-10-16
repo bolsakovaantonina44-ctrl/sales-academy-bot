@@ -70,10 +70,13 @@ def main():
             message('Тестовый Менеджер')
             for count in (10, 20, 30):
                 message('/series')
-                for text in (str(count), 'Тренажёр продаж', 'Собственник бизнеса', '7', 'Все типовые', 'Средняя', 'Готово', '▶️ Начать серию'):
+                fmt = {10: ('📞 Звонки',), 20: ('🔀 Звонки и переписка', '30%'), 30: ('💬 Переписка',)}[count]
+                for text in (str(count), *fmt, 'Тренажёр продаж', 'Собственник бизнеса', '7', 'Все типовые', 'Средняя', 'Готово', '▶️ Начать серию'):
                     message(text)
                 series = store.open_series(10)
                 assert series['config']['count'] == count and series['status'] == 'active'
+                chats = sum(c['channel'] == 'chat' for c in series['manifest'])
+                assert chats == {10: 0, 20: 6, 30: 30}[count], chats
                 fixed = series['manifest_hash']
                 for i in range(count):
                     message('Какую задачу вы хотите решить?', voice=i == 0)
@@ -124,7 +127,7 @@ def main():
             message('Как к вам обращаться?')
             assert store.current(10)['series_id'] == assigned['id']
             assert ai.client.audio.transcriptions.create.call_count == 3
-            print('PASS 10/20/30; real Telegram handlers and worker, mocked voice transcription, durable results, natural/manual endings, restart, PDF, pending forecast isolation, fixed supervisor manifest. External API calls: 0.')
+            print('PASS 10/20/30 (calls/mixed/chats); real Telegram handlers and worker, mocked voice transcription, durable results, natural/manual endings, restart, PDF, pending forecast isolation, fixed supervisor manifest. External API calls: 0.')
 
 
 if __name__ == '__main__':

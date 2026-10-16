@@ -27,7 +27,7 @@ _ORIGINAL_HANDLE = None
 _ORIGINAL_MOBILE_CALLBACK = None
 _ORIGINAL_HOME_MARKUP = None
 
-UX_STEPS = ["count", "product", "customer", "goals", "objections", "difficulty", "custom", "confirm"]
+UX_STEPS = ["count", "channel", "chat_percent", "product", "customer", "goals", "objections", "difficulty", "custom", "confirm"]
 
 
 def _db_path():
@@ -283,6 +283,16 @@ def _wizard_prompt(draft):
             + ("Вы проходите их сами." if practice else "Их подряд пройдёт выбранный сотрудник.")
             + " После старта подсказок и промежуточного разбора нет."
         ),
+        "channel": (
+            "В каком формате проходят разговоры?\n\n"
+            "📞 Звонки — разговор как по телефону.\n"
+            "💬 Переписка — диалог в мессенджере: клиент пишет коротко, как в чате.\n"
+            "🔀 Звонки и переписка — вы выберете долю переписки, состав перемешается."
+        ),
+        "chat_percent": (
+            "Какая доля серии — переписка?\n\n"
+            "Например, 30% из 10 — это 3 переписки и 7 звонков. Точное число фиксируется до старта."
+        ),
         "product": (
             "Что вы продаёте?\n\nНапишите продукт или услугу обычными словами. "
             "Например: «керамогранит для коммерческих объектов»."
@@ -348,6 +358,7 @@ def _wizard_prompt(draft):
     lines = [
         "ПРОВЕРЬТЕ СЕРИЮ",
         f"Звонков: {data['count']}",
+        _channel_summary(data),
         f"Продукт: {data['product']}",
         f"Клиент: {data['customer']}",
         "Цели: " + ", ".join((data.get("custom_goal_label", call_series.GOALS[g][0]) if g == "custom_goal" else call_series.GOALS[g][0]) for g in data["goals"]),
@@ -377,6 +388,8 @@ def _wizard_rows(session):
 
     rows = {
         "count": [["10", "20", "30"]],
+        "channel": [[CHANNEL_CALLS, CHANNEL_CHATS], [CHANNEL_MIXED]],
+        "chat_percent": [["20%", "30%", "50%", "70%"]],
         "goals": [["1", "2", "3"], ["4", "5", "6"], ["7", "✏️ Своя цель"]],
         "objections": [["Все типовые"]],
         "interested_percent": [["10", "20", "30", "50"]],
@@ -389,6 +402,32 @@ def _wizard_rows(session):
         ]],
     }.get(draft["step"], [])
     return rows + [["/cancel"]]
+
+
+CHANNEL_CALLS = "📞 Звонки"
+CHANNEL_CHATS = "💬 Переписка"
+CHANNEL_MIXED = "🔀 Звонки и переписка"
+
+
+def _channel_summary(data):
+    count, percent = data.get("count") or 0, int(data.get("chat_percent") or 0)
+    chats = round(count * percent / 100)
+    if not chats:
+        return "Формат: только звонки"
+    if chats == count:
+        return "Формат: только переписка"
+    return f"Формат: звонков {count - chats}, переписок {chats}"
+
+
+def _parse_channel(cmd):
+    cmd = cmd.replace("📞", "").replace("💬", "").replace("🔀", "").strip()
+    if cmd in ("звонки", "только звонки", "звонок", "1"):
+        return "calls"
+    if cmd in ("переписка", "только переписка", "переписки", "чат", "2"):
+        return "chats"
+    if cmd in ("звонки и переписка", "смешанно", "смешанный", "3"):
+        return "mixed"
+    return None
 
 
 def _custom_causes(text):
@@ -521,6 +560,27 @@ def _patched_wizard(self, event, s):
             if count not in (10, 20, 30):
                 raise ValueError("Выберите 10, 20 или 30.")
             data["count"] = count
+            draft["step"] = "channel"
+
+        elif step == "channel":
+            choice = _parse_channel(cmd)
+            if not choice:
+                raise ValueError("Выберите формат кнопкой: звонки, переписка или звонки и переписка.")
+            if choice == "mixed":
+                draft["step"] = "chat_percent"
+            else:
+                data["chat_percent"] = 0 if choice == "calls" else 100
+                draft["step"] = "product"
+
+        elif step == "chat_percent":
+            value = cmd.replace("%", "").strip()
+            percent = int(value) if value.isdigit() else -1
+            if not 10 <= percent <= 90:
+                raise ValueError("Введите долю переписки от 10 до 90%.")
+            chats = round(data["count"] * percent / 100)
+            if not 1 <= chats < data["count"]:
+                raise ValueError("При такой доле не получится смешанная серия. Выберите другой процент.")
+            data["chat_percent"] = percent
             draft["step"] = "product"
 
         elif step in ("product", "customer"):
