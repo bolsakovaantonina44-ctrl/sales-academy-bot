@@ -66,19 +66,19 @@ def _patched_supervisor_report(store, series, results):
     fact = (source or {}).get("crm_fact") or {}
     lines = [
         "",
-        "CENTARO · CRM-CALIBRATED FORECAST",
+        "CENTARO · ПРОГНОЗ С ПОПРАВКОЙ ПО CRM",
         f"Калибровка взята из сопоставимой серии #{source['id']}.",
         f"CRM-выборка источника: {fact.get('real_contacts', 0)} контактов · {fact.get('confidence', 'н/д')}.",
         f"Коэффициент калибровки: {calibrated['coefficient']:.2f}.",
-        f"Training Conversion текущей серии: {float(projection['training_conversion']):.1%}.",
-        f"Калиброванная конверсия для business forecast: {calibrated['calibrated_conversion']:.1%}.",
+        f"Учебная конверсия текущей серии: {float(projection['training_conversion']):.1%}.",
+        f"Конверсия с поправкой по CRM: {calibrated['calibrated_conversion']:.1%}.",
         f"Калиброванное число продаж: {calibrated['expected_sales']:.1f} в месяц.",
         f"Калиброванный потенциал выручки: {_money(calibrated['projected_revenue'])}.",
     ]
     if calibrated.get("plan_percent") is not None:
         lines.append(f"Калиброванное выполнение плана: {calibrated['plan_percent']:.0f}%.")
     lines.append(
-        "Этот forecast использует прошлый CRM-факт по сопоставимому потоку и цели. Он точнее сырой учебной модели, но остаётся прогнозом, а не гарантией выручки."
+        "Этот прогноз использует прошлый CRM-факт по сопоставимому потоку и цели. Он точнее сырой учебной модели, но остаётся прогнозом, а не гарантией выручки."
     )
     return text + "\n" + "\n".join(lines)
 

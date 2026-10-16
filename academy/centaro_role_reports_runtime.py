@@ -365,7 +365,20 @@ def _employee_report(series, results):
     return employee_summary(series, results) + "\n\nПОДРОБНЫЙ РАЗБОР СЕРИИ\n" + base
 
 
+FRAGILE_SKILL_SCORE = 60
+
+
 def _management_conclusion(series, metrics):
+    text = _plan_conclusion(series, metrics)
+    plan = (series.get("business_projection") or {}).get("plan_percent")
+    skill = metrics.get("skill_score")
+    if plan is not None and plan >= 80 and skill is not None and skill < FRAGILE_SKILL_SCORE:
+        text += (f"\nВнимание: навыки — {skill:.0f}/100. Результат держится не на технике продажи "
+                 "и может не повториться; проверьте его следующей сопоставимой серией.")
+    return text
+
+
+def _plan_conclusion(series, metrics):
     projection = series.get("business_projection") or {}
     plan = projection.get("plan_percent")
     conversion = metrics.get("training_conversion")

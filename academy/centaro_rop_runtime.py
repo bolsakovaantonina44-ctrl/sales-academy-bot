@@ -34,30 +34,35 @@ FLOW_TYPES = {
         "label": "Холодный контакт",
         "button": "❄️ Холодный контакт",
         "opening": "Добрый день. Слушаю вас.",
+        "chat_opening": "Здравствуйте. По какому вопросу?",
         "context": "Первичный холодный контакт: клиент не ожидал обращения и пока не проявлял интерес.",
     },
     "warm": {
         "label": "Тёплый контакт",
         "button": "🌤 Тёплый контакт",
         "opening": "Добрый день. Да, мне передали, что вы можете быть полезны. Слушаю вас.",
+        "chat_opening": "Здравствуйте. Да, мне передали ваш контакт. Что вы предлагаете?",
         "context": "Тёплый контакт: у клиента уже есть предварительный интерес или рекомендация.",
     },
     "inbound": {
         "label": "Входящий лид / обратный звонок",
         "button": "📥 Входящий лид",
         "opening": "Здравствуйте. Да, я оставлял заявку. Расскажите, пожалуйста.",
+        "chat_opening": "Здравствуйте! Да, я оставлял заявку. Расскажите подробнее.",
         "context": "Входящий лид: клиент ранее проявил интерес и оставил заявку или запрос.",
     },
     "existing": {
         "label": "Действующий клиент",
         "button": "🤝 Действующий клиент",
         "opening": "Добрый день. Да, мы с вами уже работаем. По какому вопросу звоните?",
+        "chat_opening": "Добрый день. Да, мы с вами уже работаем. Что хотели?",
         "context": "Действующий клиент: отношения уже существуют, задача — развить или продолжить сотрудничество.",
     },
     "reactivation": {
         "label": "Возврат / реактивация клиента",
         "button": "♻️ Возврат клиента",
         "opening": "Добрый день. Да, помню, мы раньше общались. Что у вас сейчас?",
+        "chat_opening": "Здравствуйте. Помню, мы раньше общались. Что у вас нового?",
         "context": "Реактивация: клиент ранее общался или покупал, но сейчас активной сделки нет.",
     },
 }
@@ -206,9 +211,10 @@ def _apply_flow_to_manifest(series, flow_code):
     for call in series.get("manifest") or []:
         card = call.get("card") or {}
         difficulty = call.get("difficulty")
-        opening = flow["opening"]
+        chat = call.get("channel") == "chat"
+        opening = flow["chat_opening"] if chat else flow["opening"]
         if difficulty == "hard":
-            opening += " Только давайте коротко, у меня мало времени."
+            opening += " Только коротко, пожалуйста." if chat else " Только давайте коротко, у меня мало времени."
         card["opening"] = opening
         context = str(card.get("company_context") or "").strip()
         if flow["context"] not in context:
@@ -372,13 +378,13 @@ def _supervisor_report(store, series, results):
         block += ["", "ДВЕ КОНВЕРСИИ"]
         tc = metrics.get("training_conversion")
         if tc is not None:
-            block.append(f"Training Conversion: {tc:.0%} — результат в учебной симуляции по выбранной цели.")
+            block.append(f"Учебная конверсия: {tc:.0%} — результат в учебной симуляции по выбранной цели.")
         if downstream is not None:
-            block.append(f"Business Conversion: {float(downstream):.0f}% — переход выбранного результата в фактическую оплату по данным компании.")
+            block.append(f"Конверсия в оплату: {float(downstream):.0f}% — переход выбранного результата в фактическую оплату по данным компании.")
 
     text = text.replace("Средний чек:", "Типичный чек для модели:")
-    text = text.replace("Учебная конверсия:", "Training Conversion (учебная):")
-    text = text.replace("Конверсия целевого результата в оплату:", "Business Conversion (цель → оплата):")
+    text = text.replace("Учебная конверсия:", "Учебная конверсия:")
+    text = text.replace("Конверсия целевого результата в оплату:", "Конверсия в оплату (цель → оплата):")
     return text + "\n" + "\n".join(block)
 
 

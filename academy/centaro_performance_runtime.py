@@ -260,6 +260,7 @@ def combined_report(store, series, results):
             if metrics["training_conversion"] is not None
             else "недостаточно данных"
         ),
+        *call_series.channel_breakdown(series, results),
         f"Качественных звонков (60+/100): {metrics['quality_calls']}.",
     ]
 
