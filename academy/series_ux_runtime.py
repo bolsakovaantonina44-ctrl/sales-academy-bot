@@ -480,7 +480,7 @@ def _patched_wizard(self, event, s):
     data = draft["data"]
     step = draft["step"]
 
-    if cmd in ("/cancel", "отмена"):
+    if cmd in ("/cancel", "отмена", "к академии"):
         s.pop("series_setup", None)
         self.store.commit(event, s, ["Настройка серии отменена."])
         return True

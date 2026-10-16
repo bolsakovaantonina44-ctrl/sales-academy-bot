@@ -415,6 +415,10 @@ class SeriesEngine:
         user, text = event['user_id'], event['text'].strip()
         cmd = normalize_command(text)
         series = self.store.open_series(user)
+        if (cmd == '/series_usage' or cmd.startswith('/series_usage ')) and not (series and series['status'] == 'active'):
+            # Admin lookup must not be swallowed as an answer to an open setup wizard.
+            self.store.commit(event, s, [self.usage_report(user, text)])
+            return True
         if s.get('series_setup') and not series:
             return self.wizard(event, s)
         if not series and not (cmd.startswith('/series') or cmd in ('серия звонков', 'посмотреть итог серии', 'скачать отчет серии')):
@@ -516,7 +520,7 @@ class SeriesEngine:
         text, user = event['text'].strip(), event['user_id']
         cmd = normalize_command(text)
         data, step = draft['data'], draft['step']
-        if cmd in ('/cancel', 'отмена'):
+        if cmd in ('/cancel', 'отмена', 'к академии'):
             s.pop('series_setup')
             self.store.commit(event, s, ['Настройка серии отменена.'])
             return True
