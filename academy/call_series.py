@@ -415,6 +415,14 @@ class SeriesEngine:
         user, text = event['user_id'], event['text'].strip()
         cmd = normalize_command(text)
         series = self.store.open_series(user)
+        if cmd == '/series_check' and not (series and series['status'] == 'active'):
+            if user not in self.engine.admin_ids:
+                reply = 'Проверка оценки доступна только администратору.'
+            else:
+                from .golden_check import start
+                reply = start(self.engine, user)
+            self.store.commit(event, s, [reply])
+            return True
         if (cmd == '/series_usage' or cmd.startswith('/series_usage ')) and not (series and series['status'] == 'active'):
             # Admin lookup must not be swallowed as an answer to an open setup wizard.
             self.store.commit(event, s, [self.usage_report(user, text)])
