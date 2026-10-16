@@ -103,6 +103,22 @@ class SeriesUsageCommandTests(unittest.TestCase):
         self.assertIn('нет цены в AI_PRICES_JSON для voice-model', text)
         self.assertIn('задайте USD_RUB_RATE', text)
 
+    def test_usage_and_academy_button_work_inside_open_setup(self):
+        series = self.run_series(10)
+        self.send('/series')
+        self.send('10')
+        self.assertTrue(self.store.current(self.EMP).get('series_setup'))
+        self.assertIn('только администратору', self.send('/series_usage'))
+        self.assertTrue(self.store.current(self.EMP).get('series_setup'))
+        self.assertIn('отменена', self.send('К Академии'))
+        self.assertFalse(self.store.current(self.EMP).get('series_setup'))
+        set_role(self.path, self.ADMIN, AKENSO)
+        self.send('/series', self.ADMIN)
+        self.send('10', self.ADMIN)
+        step = self.store.current(self.ADMIN)['series_setup']['step']
+        self.assertIn(f"СЕРИЯ №{series['id']}", self.send('/series_usage', self.ADMIN))
+        self.assertEqual(self.store.current(self.ADMIN)['series_setup']['step'], step)
+
     def test_employee_cannot_see_costs_and_bad_input(self):
         series = self.run_series(10)
         self.assertIn('только администратору', self.send(f"/series_usage {series['id']}"))

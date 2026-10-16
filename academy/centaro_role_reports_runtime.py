@@ -263,7 +263,7 @@ def _wizard(self, event, s):
     step = draft.get("step")
     text = str(event.get("text") or "").strip()
     cmd = normalize_command(text)
-    if cmd in ("/cancel", "отмена"):
+    if cmd in ("/cancel", "отмена", "к академии"):
         return _ORIGINAL_WIZARD(self, event, s)
 
     if step == "customer":
