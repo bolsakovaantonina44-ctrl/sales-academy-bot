@@ -13,7 +13,8 @@ class ConsentGateTransportTests(unittest.TestCase):
         self.path = str(Path(self.temp.name) / 'academy.sqlite3')
         self.env = patch.dict(os.environ, {'DB_PATH': self.path, 'ADMIN_IDS': '999', 'OPENAI_API_KEY': 'test-key',
                                            'TELEGRAM_TOKEN': '12345:test-token',
-                                           'CONSENT_OPERATOR': 'ООО «Тест», ИНН 0000000000',
+                                           'CONSENT_OPERATOR': 'ИП Тестов Т. Т., ИНН 000000000000',
+                                           'CONSENT_DOC_URL': 'https://example.com/consent',
                                            'PRIVACY_POLICY_URL': 'https://example.com/privacy'}, clear=True)
         self.env.start()
         import bot as app
@@ -56,11 +57,13 @@ class ConsentGateTransportTests(unittest.TestCase):
         out = self.send('/start')
         self.assertEqual(len(out), 1)
         text, buttons = out[0]
-        self.assertIn('СОГЛАСИЕ НА ОБРАБОТКУ ПЕРСОНАЛЬНЫХ ДАННЫХ', text)
-        self.assertIn('ООО «Тест», ИНН 0000000000', text)
+        self.assertIn('Добро пожаловать в CENTARO', text)
+        self.assertIn('согласие на обработку персональных данных: https://example.com/consent', text)
         self.assertIn('https://example.com/privacy', text)
-        self.assertIn('OpenAI', text)
-        self.assertEqual(buttons, [consent.ACCEPT, consent.DECLINE])
+        self.assertIn('/privacy_revoke', text)
+        self.assertNotIn('Не называйте', text)
+        self.assertLess(len(text), 400)
+        self.assertEqual(buttons, [consent.ACCEPT])
         self.assertEqual(self.queued(), 0)
         self.send(voice=True)
         self.assertEqual(self.queued(), 0)
@@ -82,15 +85,25 @@ class ConsentGateTransportTests(unittest.TestCase):
     def test_decline_support_and_policy_before_consent(self):
         from academy import consent
         self.assertIn('Без согласия', self.send(consent.DECLINE)[0][0])
-        self.assertIn('СОГЛАСИЕ', self.send('/privacy')[0][0])
+        self.assertIn('согласие', self.send('/privacy')[0][0])
         self.send('/support')
         self.assertFalse(consent.has_consent(self.path, 10))
+
+    def test_old_button_label_still_accepted_and_fallback_text(self):
+        from academy import consent
+        self.send('✅ Принимаю условия')
+        self.assertTrue(consent.has_consent(self.path, 10))
+        with patch.dict(os.environ, {'CONSENT_DOC_URL': ''}):
+            text = consent.consent_text()
+        self.assertIn('ИП Тестов Т. Т., ИНН 000000000000', text)
+        self.assertIn('OpenAI', text)
+        self.assertNotIn('Не называйте', text)
 
     def test_new_version_requires_new_acceptance_and_switch_off(self):
         from academy import consent
         consent.record(self.path, 10, 'accepted')
         with patch.object(consent, 'CONSENT_VERSION', '2099-01-01'):
-            self.assertIn('СОГЛАСИЕ', self.send('/start')[0][0])
+            self.assertIn('Добро пожаловать', self.send('/start')[0][0])
             self.assertEqual(self.queued(), 0)
         with patch.dict(os.environ, {'CONSENT_REQUIRED': 'false'}):
             self.send('/start', user=11)
