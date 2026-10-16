@@ -372,13 +372,13 @@ def _supervisor_report(store, series, results):
         block += ["", "ДВЕ КОНВЕРСИИ"]
         tc = metrics.get("training_conversion")
         if tc is not None:
-            block.append(f"Training Conversion: {tc:.0%} — результат в учебной симуляции по выбранной цели.")
+            block.append(f"Учебная конверсия: {tc:.0%} — результат в учебной симуляции по выбранной цели.")
         if downstream is not None:
-            block.append(f"Business Conversion: {float(downstream):.0f}% — переход выбранного результата в фактическую оплату по данным компании.")
+            block.append(f"Конверсия в оплату: {float(downstream):.0f}% — переход выбранного результата в фактическую оплату по данным компании.")
 
     text = text.replace("Средний чек:", "Типичный чек для модели:")
-    text = text.replace("Учебная конверсия:", "Training Conversion (учебная):")
-    text = text.replace("Конверсия целевого результата в оплату:", "Business Conversion (цель → оплата):")
+    text = text.replace("Учебная конверсия:", "Учебная конверсия:")
+    text = text.replace("Конверсия целевого результата в оплату:", "Конверсия в оплату (цель → оплата):")
     return text + "\n" + "\n".join(block)
 
 

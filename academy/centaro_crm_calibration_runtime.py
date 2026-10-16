@@ -110,7 +110,7 @@ def build_crm_fact(training_conversion, real_contacts, real_outcomes, revenue=No
     if not 0 <= real_outcomes <= real_contacts:
         raise ValueError("Число целевых результатов должно быть от 0 до числа контактов.")
     if training_conversion is None:
-        raise ValueError("В серии нет проверенной Training Conversion.")
+        raise ValueError("В серии нет проверенной учебной конверсии.")
 
     training = float(training_conversion)
     crm_conversion = real_outcomes / real_contacts
@@ -137,19 +137,19 @@ def _calibration_report(series):
         return None
     coefficient = fact.get("calibration_coefficient")
     lines = [
-        "CENTARO · CRM-КАЛИБРОВКА",
+        "CENTARO · СВЕРКА С CRM",
         f"Тип потока: {_flow_label(series)}",
         f"Цель: {_goal_label(series)}",
         f"CRM-выборка: {fact.get('real_contacts', 0)} сопоставимых контактов",
         f"Фактических целевых результатов: {fact.get('real_outcomes', 0)}",
-        f"Training Conversion: {_fmt_pct(fact.get('training_conversion'))}",
-        f"CRM Conversion: {_fmt_pct(fact.get('crm_conversion'))}",
+        f"Учебная конверсия: {_fmt_pct(fact.get('training_conversion'))}",
+        f"Конверсия по CRM: {_fmt_pct(fact.get('crm_conversion'))}",
         f"Надёжность: {fact.get('confidence', 'н/д')}",
     ]
     if coefficient is not None:
         lines.append(f"Коэффициент калибровки: {coefficient:.2f}")
         if coefficient < 0.85:
-            lines.append("Учебная модель пока переоценивает фактическую конверсию — коммерческий forecast нужно понижать.")
+            lines.append("Учебная модель пока переоценивает фактическую конверсию — коммерческий прогноз нужно понижать.")
         elif coefficient > 1.15:
             lines.append("Фактическая конверсия выше учебной — в реальной среде менеджер конвертирует лучше симуляции.")
         else:
@@ -349,7 +349,7 @@ def _patched_supervisor_report(store, series, results):
         text += (
             "\n\nCRM-КАЛИБРОВКА\n"
             "CRM-факт ещё не внесён. После накопления реальных сопоставимых контактов руководитель может "
-            "сопоставить Training Conversion с фактической CRM Conversion."
+            "сопоставить учебную конверсию с фактической конверсией по CRM."
         )
     return text
 
