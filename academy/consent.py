@@ -18,6 +18,8 @@ REVOKE_COMMAND = '/privacy_revoke'
 POLICY_COMMAND = '/privacy'
 # Commands that must work before consent: they process nothing beyond the command itself.
 OPEN_COMMANDS = ('/support', POLICY_COMMAND)
+# Sent on acceptance; the entry point then continues straight to /start.
+ACCEPTED_REPLY = 'Спасибо, согласие сохранено.'
 
 
 def required():
@@ -92,7 +94,7 @@ def gate(path, user_id, text):
         return None
     if command in ACCEPT_ALIASES:
         record(path, user_id, 'accepted')
-        return 'Спасибо, согласие сохранено. Нажмите /start, чтобы начать.', [['/start']]
+        return ACCEPTED_REPLY, []
     if command == DECLINE:
         record(path, user_id, 'declined')
         return ('Без согласия тренажёр не может сохранять тренировки и отчёты. '

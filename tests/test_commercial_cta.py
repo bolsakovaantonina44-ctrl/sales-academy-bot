@@ -42,7 +42,7 @@ class CommercialCtaTests(unittest.TestCase):
         pending = store.outgoing(101)
         self.assertEqual(len(pending), 1)
         self.assertIn('Тестовый доступ завершён.', pending[0]['body'])
-        self.assertIn('для компании', pending[0]['body'])
+        self.assertIn('Хочу продолжить', pending[0]['body'])
         Store(self.path)
         self.assertEqual(len(store.outgoing(101)), 1)
 

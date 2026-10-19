@@ -142,7 +142,7 @@ class KnowledgeTransportTests(unittest.TestCase):
             if call.args and call.args[0] == 20
         ]
         self.assertEqual(len(employee_messages), 1)
-        self.assertIn('корпоративный доступ АКЕНСО', employee_messages[0])
+        self.assertIn('корпоративный доступ CENTARO', employee_messages[0])
         self.assertIn('без ограничения', employee_messages[0])
         self.assertIn('история и разборы сохранены', employee_messages[0])
 

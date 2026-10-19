@@ -179,7 +179,7 @@ class LiveRegressions(unittest.TestCase):
             for audience in ('employee','supervisor'):
                 with pdfplumber.open(render_pdf(s,audience)) as doc:
                     text='\n'.join(p.extract_text() or '' for p in doc.pages)
-                self.assertIn('Академия продаж',text)
+                self.assertIn('CENTARO',text)
                 self.assertNotIn('SECRET-HIDDEN',text)
                 for _,title,_ in SKILLS:
                     self.assertIn(title,text)

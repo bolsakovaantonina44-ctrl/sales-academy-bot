@@ -435,8 +435,7 @@ def main():
     def _sales_main_markup():
         markup = telebot.types.InlineKeyboardMarkup(row_width=1)
         markup.add(
-            telebot.types.InlineKeyboardButton('👤 Продолжить для себя', callback_data='sales:self'),
-            telebot.types.InlineKeyboardButton('👥 Подключить для компании', callback_data='sales:company'),
+            telebot.types.InlineKeyboardButton('✍️ Хочу продолжить', callback_data='sales:company_start'),
         )
         return markup
 
@@ -474,7 +473,7 @@ def main():
 
     def _send_company_question(chat_id, state, edit_message=None):
         question = state['question']
-        prefix = f"Заявка для компании · шаг {state['step'] + 1} из {len(commercial_cta.COMPANY_QUESTIONS)}\n\n"
+        prefix = f"Заявка · шаг {state['step'] + 1} из {len(commercial_cta.COMPANY_QUESTIONS)}\n\n"
         text = prefix + question['prompt']
         markup = _company_question_markup(state)
         if edit_message is not None:
@@ -910,6 +909,10 @@ def main():
         if not blocked:
             return False
         reply, rows = blocked
+        if reply == consent.ACCEPTED_REPLY:
+            # Consent just given: confirm and let the same message continue as /start.
+            bot.send_message(chat_id, reply, reply_markup=telebot.types.ReplyKeyboardRemove())
+            return 'accepted'
         bot.send_message(chat_id, reply, reply_markup=_reply_markup(rows))
         return True
 
@@ -919,7 +922,11 @@ def main():
         cmd = normalize_command(message.text or '')
         if chat_id <= 0:
             return
-        if _consent_blocked(chat_id, message.text or ''):
+        gate_result = _consent_blocked(chat_id, message.text or '')
+        if gate_result == 'accepted':
+            message.text = '/start'
+            cmd = normalize_command(message.text)
+        elif gate_result:
             return
         active_series = store.open_series(chat_id)
         if (active_series and active_series['status'] == 'active'
@@ -952,9 +959,9 @@ def main():
                 _notify_sales_admins(lead_text)
                 bot.send_message(
                     chat_id,
-                    'Спасибо! Заявка получена.\n\n'
-                    'Специалист Академии свяжется с вами, уточнит задачи и покажет, '
-                    'как настроить систему под вашу команду.',
+                    'Спасибо! Заявка получена ✅\n\n'
+                    'Мы свяжемся с вами лично в Telegram, уточним задачу '
+                    'и предложим подходящий формат.',
                 )
             else:
                 _send_company_question(chat_id, result['state'])
@@ -1061,6 +1068,10 @@ def main():
         try:
             parts = str(call.data).split(':')
             action = parts[1]
+            if action in ('self', 'company', 'plan'):
+                # Buttons from earlier versions of the offer: prices are no longer shown,
+                # every path leads to the short questionnaire that reaches the owner.
+                action = 'company_start'
             if action == 'self':
                 bot.edit_message_text(
                     commercial_cta.individual_text(),
@@ -1168,9 +1179,9 @@ def main():
                         result['lead_id'], chat_id, result['data'], _training_summary(chat_id)
                     ))
                     bot.edit_message_text(
-                        'Спасибо! Заявка получена.\n\n'
-                        'Специалист Академии свяжется с вами, уточнит задачи и покажет, '
-                        'как настроить систему под вашу команду.',
+                        'Спасибо! Заявка получена ✅\n\n'
+                        'Мы свяжемся с вами лично в Telegram, уточним задачу '
+                        'и предложим подходящий формат.',
                         chat_id,
                         call.message.message_id,
                     )
@@ -1345,13 +1356,13 @@ def main():
                 send_access_user_card(chat_id, user_id, call.message.message_id)
                 bot.answer_callback_query(call.id, f'Роль: {ROLE_LABELS[role]}')
                 if role in {AKENSO, SUPERVISOR} and role != previous_role:
-                    access_label = ('корпоративный доступ АКЕНСО' if role == AKENSO
-                                    else 'доступ руководителя АКЕНСО')
+                    access_label = ('корпоративный доступ CENTARO' if role == AKENSO
+                                    else 'доступ руководителя CENTARO')
                     notification = (
                         f'Вам подключён {access_label}.\n\n'
                         'Вы можете продолжать тренировки без ограничения. '
                         'Предыдущая история и разборы сохранены.\n\n'
-                        'Нажмите «Новая тренировка» или «К Академии».'
+                        'Нажмите «Новая тренировка», чтобы начать.'
                     )
                     try:
                         bot.send_message(
