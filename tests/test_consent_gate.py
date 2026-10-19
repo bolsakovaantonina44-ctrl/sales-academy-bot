@@ -74,8 +74,10 @@ class ConsentGateTransportTests(unittest.TestCase):
         out = self.send(consent.ACCEPT)
         self.assertIn('согласие сохранено', out[0][0])
         self.assertTrue(consent.has_consent(self.path, 10))
-        self.send('/start')
+        # Acceptance continues straight into /start: no second tap needed.
         self.assertEqual(self.queued(), 1)
+        with self.store.db() as db:
+            self.assertEqual(db.execute('SELECT text FROM inbox').fetchone()[0], '/start')
         out = self.send('/privacy_revoke')
         self.assertIn('Согласие отозвано', out[0][0])
         self.send('/start')

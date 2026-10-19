@@ -13,28 +13,35 @@ INDIVIDUAL_10_PRICE = 1490
 INDIVIDUAL_MONTH_PRICE = 3990
 
 COMPANY_QUESTIONS = (
-    {'key': 'company_name', 'prompt': 'Как называется ваша компания?'},
-    {'key': 'industry', 'prompt': 'Чем занимается компания?'},
-    {'key': 'team_size', 'prompt': 'Сколько сотрудников планируете обучать?',
-     'options': (('1–5', '1-5'), ('6–15', '6-15'), ('16–50', '16-50'), ('50+', '50+'))},
-    {'key': 'goal', 'prompt': 'Какой формат вам ближе?',
+    {'key': 'company_name', 'prompt': 'Как называется ваша компания? Если хотите тренироваться сами — напишите «для себя».'},
+    {'key': 'industry', 'prompt': 'Что вы продаёте и кому?'},
+    {'key': 'team_size', 'prompt': 'Сколько человек будет тренироваться?',
+     'options': (('Только я', '1'), ('2–5', '2-5'), ('6–15', '6-15'), ('16 и больше', '16+'))},
+    {'key': 'task', 'prompt': 'Какая задача сейчас важнее всего?',
      'options': (
-         ('Всё вместе', 'all'),
-         ('Только AI-тренировки', 'training_only'),
-         ('База знаний + регламенты + AI-тренировки', 'knowledge_training'),
+         ('Отбор кандидатов до найма', 'hiring'),
+         ('Адаптация новичков', 'onboarding'),
+         ('Проверка навыков всего отдела', 'audit'),
+         ('Регулярные тренировки команды', 'regular'),
+         ('Тренироваться самому', 'self'),
      )},
-    {'key': 'knowledge', 'prompt': 'Есть ли сейчас база знаний и регламенты?',
-     'options': (('Да', 'yes'), ('Частично', 'partial'), ('Нет', 'no'))},
     {'key': 'contact_name', 'prompt': 'Как к вам обращаться?'},
     {'key': 'contact', 'prompt': 'Оставьте телефон или Telegram для связи.'},
 )
 
 OPTION_LABELS = {
-    '1-5': '1–5',
+    '1': 'Только я',
+    '2-5': '2–5',
     '6-15': '6–15',
+    '16+': '16 и больше',
+    '1-5': '1–5',
     '16-50': '16–50',
     '50+': '50+',
-    'onboarding': 'Обучение новичков',
+    'hiring': 'Отбор кандидатов до найма',
+    'onboarding': 'Адаптация новичков',
+    'audit': 'Проверка навыков всего отдела',
+    'regular': 'Регулярные тренировки команды',
+    'self': 'Тренироваться самому',
     'training': 'Тренировка продаж',
     'assessment': 'Аттестация',
     'knowledge': 'База знаний и регламенты',
@@ -55,26 +62,21 @@ def _now():
 
 def _contact():
     value = os.getenv('COMMERCIAL_CONTACT', '').strip()
-    return value or 'специалист Академии'
+    return value or 'мы'
 
 
 def cta_text():
     return (
         f'{CTA_HEADING}\n\n'
         'Вы прошли 3 бесплатные тренировки и получили разбор своих навыков.\n\n'
-        'Выберите, как хотите продолжить: тренироваться самостоятельно '
-        'или подключить Академию для компании.'
+        'Хотите продолжить — для себя или для своей команды? Нажмите «Хочу продолжить» '
+        'и ответьте на 6 коротких вопросов. Мы свяжемся с вами лично в Telegram '
+        'и подберём формат под вашу задачу.'
     )
 
 
 def company_intro_text():
-    return (
-        'АКАДЕМИЯ ДЛЯ ВАШЕЙ КОМАНДЫ\n\n'
-        'Настроим систему под ваши продажи: обучение новичков, AI-тренировки, '
-        'база знаний и регламенты, аттестация и отчёты руководителю.\n\n'
-        'Ответьте на 7 коротких вопросов — это займёт около 2 минут. '
-        'Мы посмотрим вашу задачу и свяжемся с вами, чтобы показать подходящий формат.'
-    )
+    return cta_text()
 
 
 def is_cta_text(value):
@@ -285,14 +287,13 @@ def company_lead_text(lead_id, user_id, data, training_summary=''):
     username = telegram.get('username')
     tg_line = f"@{username}" if username else f'Telegram ID {user_id}'
     lines = [
-        '🔥 НОВАЯ КОРПОРАТИВНАЯ ЗАЯВКА',
+        '🔥 НОВАЯ ЗАЯВКА CENTARO',
         '',
         f'Лид: #{lead_id}',
         f"Компания: {data.get('company_name', '—')}",
-        f"Сфера: {data.get('industry', '—')}",
-        f"Сотрудников: {OPTION_LABELS.get(data.get('team_size'), data.get('team_size', '—'))}",
-        f"Формат: {OPTION_LABELS.get(data.get('goal'), data.get('goal', '—'))}",
-        f"База знаний: {OPTION_LABELS.get(data.get('knowledge'), data.get('knowledge', '—'))}",
+        f"Что продают: {data.get('industry', '—')}",
+        f"Человек: {OPTION_LABELS.get(data.get('team_size'), data.get('team_size', '—'))}",
+        f"Задача: {OPTION_LABELS.get(data.get('task'), data.get('task', '—'))}",
         f"Имя: {data.get('contact_name', '—')}",
         f"Контакт: {data.get('contact', '—')}",
         f'Telegram: {tg_line}',

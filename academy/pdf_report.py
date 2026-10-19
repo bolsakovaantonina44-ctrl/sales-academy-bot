@@ -38,7 +38,7 @@ def render_pdf(session, audience='employee'):
 
     stream = BytesIO()
     doc = SimpleDocTemplate(stream, pagesize=A4, rightMargin=34, leftMargin=34, topMargin=34, bottomMargin=40,
-                            title='Академия продаж — Результат тренировки', author='Академия продаж')
+                            title='CENTARO — Результат тренировки', author='CENTARO')
     employee = session.get('employee', {})
     fields = session['fields']
     focus_label = FOCUS_OBJECTIONS.get(session.get('training_focus'), {}).get('label', 'Общий разговор')
@@ -152,7 +152,7 @@ def render_pdf(session, audience='employee'):
     def footer(canvas, document):
         canvas.setFont('Academy', 8.5)
         canvas.setFillColor(colors.HexColor('#63748A'))
-        canvas.drawString(34, 22, 'Академия продаж · ' + session.get('versions', {}).get('rubric', ''))
+        canvas.drawString(34, 22, 'CENTARO · ' + session.get('versions', {}).get('rubric', ''))
         canvas.drawRightString(A4[0] - 34, 22, str(document.page))
 
     doc.build(story, onFirstPage=footer, onLaterPages=footer)

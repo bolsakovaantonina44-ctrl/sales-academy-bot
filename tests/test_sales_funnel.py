@@ -30,10 +30,9 @@ class SalesFunnelTests(unittest.TestCase):
 
         answers = [
             'ООО Тест',
-            'Производство',
-            '16-50',
-            'knowledge_training',
-            'partial',
+            'Оборудование для производств',
+            '6-15',
+            'audit',
             'Иван',
             '@buyer',
         ]
@@ -42,8 +41,11 @@ class SalesFunnelTests(unittest.TestCase):
             result = commercial_cta.answer_company(self.path, 101, value)
 
         self.assertTrue(result['finished'])
-        self.assertEqual(result['data']['team_size'], '16-50')
-        self.assertEqual(result['data']['goal'], 'knowledge_training')
+        self.assertEqual(result['data']['team_size'], '6-15')
+        self.assertEqual(result['data']['task'], 'audit')
+        lead = commercial_cta.company_lead_text(result['lead_id'], 101, result['data'])
+        self.assertIn('Задача: Проверка навыков всего отдела', lead)
+        self.assertIn('@buyer', lead)
         self.assertIsNone(commercial_cta.company_state(self.path, 101))
 
         with Store(self.path).db() as db:
@@ -55,23 +57,16 @@ class SalesFunnelTests(unittest.TestCase):
         self.assertEqual(row['status'], 'new')
         self.assertIn('ООО Тест', row['payload'])
 
-    def test_company_intro_explains_value_before_form(self):
+    def test_offer_has_no_price_and_leads_to_questionnaire(self):
         text = commercial_cta.company_intro_text()
-        self.assertIn('AI-тренировки', text)
-        self.assertIn('база знаний', text.lower())
-        self.assertIn('аттестация', text.lower())
-        self.assertIn('2 минут', text)
+        self.assertIn('Хочу продолжить', text)
+        self.assertIn('свяжемся с вами лично', text)
+        self.assertNotIn('₽', text)
+        self.assertIn(f'{len(commercial_cta.COMPANY_QUESTIONS)} коротких вопросов', text)
 
-    def test_company_format_has_three_clear_packages(self):
-        options = commercial_cta.COMPANY_QUESTIONS[3]['options']
-        self.assertEqual(
-            options,
-            (
-                ('Всё вместе', 'all'),
-                ('Только AI-тренировки', 'training_only'),
-                ('База знаний + регламенты + AI-тренировки', 'knowledge_training'),
-            ),
-        )
+    def test_task_question_matches_offer_scenarios(self):
+        options = dict((value, label) for label, value in commercial_cta.COMPANY_QUESTIONS[3]['options'])
+        self.assertEqual(set(options), {'hiring', 'onboarding', 'audit', 'regular', 'self'})
 
     def test_individual_interest_records_selected_plan(self):
         lead_id = commercial_cta.record_individual_interest(
@@ -88,7 +83,8 @@ class SalesFunnelTests(unittest.TestCase):
 
     def test_cta_has_no_company_price(self):
         text = commercial_cta.cta_text()
-        self.assertIn('для компании', text)
+        self.assertIn('для своей команды', text)
+        self.assertNotIn('₽', text)
         self.assertNotIn('29 900', text)
         self.assertNotIn('49 900', text)
 
