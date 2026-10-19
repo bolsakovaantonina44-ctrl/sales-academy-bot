@@ -33,5 +33,40 @@ class ObjectionTimingTests(unittest.TestCase):
         self.assertEqual(session['state']['required_objection'], 'Дорого.')
 
 
+class ClientVoicesObjectionTests(unittest.TestCase):
+    def _payload(self, required, focus='b1', suppress=False):
+        from academy.ai import AI
+        ai = AI.__new__(AI)
+        seen = {}
+
+        def fake_request(name, instructions, payload, schema, model=None, max_output_tokens=6000):
+            seen.update(name=name, instructions=instructions, payload=payload)
+            return {'reply': 'Сейчас не до этого.', 'used_fact_ids': []}
+
+        ai.request = fake_request
+        session = session_empty()
+        session['fields'].update(difficulty='hard', product='Тренажёр')
+        session['card'] = {'role': 'Директор', 'behavior_type': 'busy', 'identity': {'name': 'Анна'},
+                           'facts': [], 'unknown': [], 'barriers': [{'id': 'b1', 'text': 'Сейчас сезон, не до обучения.'}]}
+        state = {'trust': 2, 'interest': 2, 'last_action': 'question', 'close': 'continue', 'agreement': '',
+                 'revealed': [], 'required_objection': required, 'focus_issue_id': focus,
+                 'suppress_issue_repeat': suppress}
+        AI.reply(ai, session, 'Можем начать с пробы.', state)
+        return seen
+
+    def test_required_objection_text_reaches_client_and_must_be_voiced(self):
+        seen = self._payload('Сейчас сезон, не до обучения.')
+        self.assertEqual(seen['name'], 'client_reply')
+        self.assertEqual(seen['payload']['required_objection'], 'Сейчас сезон, не до обучения.')
+        self.assertIn('обязательно выскажи именно это сомнение', seen['instructions'])
+        self.assertNotIn('программа добавит отдельно', seen['instructions'])
+
+    def test_open_barrier_stays_as_context_when_no_new_objection(self):
+        seen = self._payload('')
+        self.assertEqual(seen['payload']['required_objection'], '')
+        self.assertEqual(seen['payload']['active_barrier'], 'Сейчас сезон, не до обучения.')
+        self.assertEqual(self._payload('', suppress=True)['payload']['active_barrier'], '')
+
+
 if __name__ == '__main__':
     unittest.main()
